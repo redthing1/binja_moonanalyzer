@@ -16,19 +16,54 @@ from ..listing import (
 )
 
 GATHER_CONTEXT_PROMPT_TEMPLATE = '''You are a reverse-engineering assistant.
-You will be given a listing of decompilation outputs of some functions of interest from a binary analysis tool.
-Carefully analyze the functions to understand them properly, thinking hard to analyze in depth.
-After reading the listing, you will have to explain each function's logic and workings.
-After analyzing the functions, you will output a fenced DSL code block to rename things and add comments based on your analysis.
 
-TASK
-1. Think carefully and analyze each function.
-2. Explain the logic and workings of each function.
-3. After explaining all the functions, emit one fenced ```bn-dsl marakdown code block containing COMMENT / FNAME / VNAME statements.
-   - Use the exact 0x-addresses shown in the listing.
-   - Rename only the *root* of cascaded locals (e.g. rename `buf`, not `buf_1`).
-   - Prefer verb-style snake_case for function names.
-   - Multi-line comments welcome: COMMENT <addr> """ ... """
+TASK:
+1. For each function in the listing, write a focused explanation (up to 200 words) covering:
+   - Overall purpose  
+   - Inputs & outputs  
+   - Control flow highlights (branches, loops)  
+   - Major data operations (buffers, copies)  
+   - Side effects, error paths, security notes  
+
+2. After all explanations, output exactly one fenced bn-dsl block.
+   In that block, include only these statements, one per line:
+
+     COMMENT <addr> """ any text, may span lines """
+     FNAME   <addr> <new_function_name>
+     VNAME   <addr> <old_var_root> <new_var_root>
+
+   **BN-DSL EXPECTATIONS**  
+   - **FNAME:** Try to rename every function whose name is generic (e.g. sub_XXXXX) or unclear.
+   - **VNAME:** Try to rename any local or parameter whose root name is non-descriptive (e.g. var_123, buf, ptr) to something meaningful.
+   - **COMMENT:** Add some comments per interesting function at the *most important* spots, such as:
+     - Function entry (summarize the purpose)  
+     - Key branch or loop heads  
+     - Before/after major memory ops (memcpy, alloc, free)  
+     - On early-exit or error-handling paths  
+   - Strive for breadth: each function should have at least one FNAME, one VNAME, and one COMMENT where it adds clarity.
+   - Acknowledge uncertainty or unclear cases with comments, to make it clear something needs further analysis.
+   - Use the exact 0x-addresses from the listing margin.
+   - Rename only the *root* of cascaded locals (e.g. rename buf, not buf_1).
+   - Use snake_case, verb-style names (≤ 40 chars).
+   - Multi-line comments must use triple quotes.
+
+BN-DSL EXAMPLES:
+```bn-dsl
+# Function rename + entry comment
+FNAME   0x006ebf00 check_and_load_license
+COMMENT 0x006ebf00 """Entry: verify or load license blob."""
+
+# Early-exit comment
+COMMENT 0x006ebf58 """Early-out if license already validated."""
+
+# Memory op comment
+COMMENT 0x006ebf64 """Copy user_buf into local buffer without length check."""
+
+# Variable rename (propagates to buffers)
+VNAME   0x006ebf64 user_buf license_env
+
+# Rename a generic flag variable
+VNAME   0x006ed104 var_3d9  license_status_flag
 
 LISTING
 ```hlil
