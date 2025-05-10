@@ -1,35 +1,133 @@
 import binaryninja
-from binaryninja import BinaryView, PluginCommand
+from binaryninja import (
+    BinaryView,
+    PluginCommand,
+    interaction,
+)
 
 from ..defs import LOGGER_NAME
+from ..settings import my_settings
 
-from .gather_context import GatherQuickAnalysisContextTask
+from .gather_context import GatherAnalysisContextTask, AnalysisParameters
 from .execute_dsl import ExecuteBNDSLTask
 
 
-def menu_quick_analysis_begin(bv: BinaryView):
-    # run gather context
-    gather_task = GatherQuickAnalysisContextTask(bv)
-    gather_task.run()
-
-    # check if canceled
-    if gather_task.cancelled:
-        # too bad
+# - ui interaction helper
+def _show_analysis_result_dialog(
+    bv: BinaryView, task: GatherAnalysisContextTask, mode_name_for_title: str
+):
+    """
+    displays the analysis result from the completed (or cancelled) task.
+    """
+    if (
+        task.cancelled and not task.result_string
+    ):  # cancelled before any result could be set
+        bv.show_message_box(
+            f"{mode_name_for_title} Analysis",
+            "Context gathering was cancelled by user or an early error.",
+            buttons=binaryninja.interaction.MessageBoxButtonSet.OKButtonSet,
+            icon=binaryninja.interaction.MessageBoxIcon.WarningIcon,
+        )
         return
 
-    # show dialog with context
-    prompt_title = "Quick Analysis"
+    # if result_string is empty or indicates an error, show a specific message
+    if not task.result_string or task.result_string.startswith("Error:"):
+        error_message = (
+            task.result_string
+            if task.result_string
+            else "Failed to gather context or no context was produced."
+        )
+        bv.show_message_box(
+            f"{mode_name_for_title} Analysis",
+            error_message,
+            buttons=binaryninja.interaction.MessageBoxButtonSet.OKButtonSet,
+            icon=binaryninja.interaction.MessageBoxIcon.ErrorIcon,
+        )
+        return
 
-    context_val = gather_task.result_string
+    prompt_title = f"Analysis Context"
     context_text_field = binaryninja.interaction.MultilineTextField(
-        prompt="", default=context_val
+        prompt="", default=task.result_string
     )
-    if binaryninja.interaction.get_form_input([context_text_field], prompt_title):
-        # clicked ok
-        return context_text_field.result
-    else:
-        # canceled
-        return None
+
+    # show results in an editable multiline text field
+    binaryninja.interaction.get_form_input([context_text_field], prompt_title)
+
+
+# - menu command functions
+def menu_quick_analysis_begin(bv: BinaryView):
+    log = bv.create_logger(LOGGER_NAME)  # logger for menu-specific actions
+    log.log_info("quick analysis command triggered.")
+
+    raw_max_depth = my_settings.get_integer(
+        "moonanalyzer.quick_analysis_context_depth", bv
+    )
+    clamped_max_depth = max(0, min(raw_max_depth, 3))
+    max_func_count = max(
+        0, my_settings.get_integer("moonanalyzer.quick_analysis_max_function_count", bv)
+    )
+
+    params = AnalysisParameters(
+        max_depth=clamped_max_depth,
+        max_function_count=max_func_count,
+        initial_func_addr=bv.offset,
+    )
+
+    gather_task = GatherAnalysisContextTask(bv, params)
+    gather_task.run()
+
+    _show_analysis_result_dialog(bv, gather_task, "Quick")
+
+
+def menu_custom_analysis_begin(bv: BinaryView):
+    log = bv.create_logger(LOGGER_NAME)
+    log.log_info("custom analysis command triggered.")
+
+    default_raw_max_depth = my_settings.get_integer(
+        "moonanalyzer.quick_analysis_context_depth", bv
+    )
+    default_clamped_max_depth = max(0, min(default_raw_max_depth, 3))
+    default_max_func_count = max(
+        0, my_settings.get_integer("moonanalyzer.quick_analysis_max_function_count", bv)
+    )
+
+    depth_field = interaction.IntegerField(
+        "Max Traversal Depth:",
+        default=default_clamped_max_depth,
+    )
+    count_field = interaction.IntegerField(
+        "Max Functions:",
+        default=default_max_func_count,
+    )
+    custom_prompt_field = interaction.MultilineTextField(
+        "Additional Focus Instructions (Optional):",
+        default="",
+    )
+    detail_level_field = interaction.MultilineTextField(
+        f"Level of Detail (Optional):",
+        default="",
+    )
+
+    form_fields = [depth_field, count_field, custom_prompt_field, detail_level_field]
+
+    if interaction.get_form_input(form_fields, "Custom Analysis Parameters"):
+        user_depth = max(0, min(depth_field.result, 3))
+        user_count = max(0, count_field.result)
+        user_custom_prompt = custom_prompt_field.result.strip()
+        user_detail_level = detail_level_field.result.strip()
+
+        params = AnalysisParameters(
+            max_depth=user_depth,
+            max_function_count=user_count,
+            custom_prompt_additions=user_custom_prompt,
+            level_of_detail_instructions=user_detail_level,
+            initial_func_addr=bv.offset,
+        )
+
+        gather_task = GatherAnalysisContextTask(bv, params)
+        gather_task.run()
+
+        _show_analysis_result_dialog(bv, gather_task, "Custom")
 
 
 def menu_execute_dsl(bv: BinaryView):
@@ -45,7 +143,7 @@ def menu_execute_dsl(bv: BinaryView):
     else:
         # canceled
         return None
-    
+
     # run task to execute the DSL script
     dsl_task = ExecuteBNDSLTask(bv, dsl_script)
     dsl_task.run()
@@ -57,9 +155,15 @@ def menu_execute_dsl(bv: BinaryView):
 
 
 PluginCommand.register(
-    "MoonAnalyzer\\Quick Analysis",
-    "Begin quick analysis of the current function",
+    "MoonAnalyzer\\Analysis Context (Quick)",
+    "Gather context for the current function and its callees using default setting",
     menu_quick_analysis_begin,
+)
+
+PluginCommand.register(
+    "MoonAnalyzer\\Analysis Context (Custom)",
+    "Gather context for the current function and its callees using custom settings",
+    menu_custom_analysis_begin,
 )
 
 PluginCommand.register(
