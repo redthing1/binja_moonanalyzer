@@ -189,7 +189,7 @@ PluginCommand.register(
 )
 
 PluginCommand.register(
-    "MoonAnalyzer\\Execute DSL",
+    "MoonAnalyzer\\Execute BN-DSL",
     "Execute BN-DSL script to annotate functions",
     menu_execute_dsl,
 )
