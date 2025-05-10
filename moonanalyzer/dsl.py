@@ -5,6 +5,7 @@
 #   "lark"
 # ]
 # ///
+# run with: uv run --script ./moonanalyzer/dsl.py
 
 # bndsl_parser.py (or dsl.py)
 """
