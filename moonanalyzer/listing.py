@@ -227,7 +227,7 @@ def format_listing_lines(
         yield f"{formatted_address}\t{listing_line.text}"
 
 
-def create_formatted_code_listing_string(
+def format_code_listing(
     func: Function,
     display_type: CodeDisplayType,
     hex_address_width: Optional[int] = None,

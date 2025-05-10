@@ -5,7 +5,7 @@ from .defs import LOGGER_NAME
 
 from .listing import (
     get_function_code_lines,
-    create_formatted_code_listing_string,
+    format_code_listing,
     CodeDisplayType,
     LinearListingLine,
 )
@@ -16,6 +16,18 @@ class GatherQuickAnalysisContextTask(BackgroundTask):
         BackgroundTask.__init__(self, "Gathering context...", can_cancel=True)
         self.bv = bv
         self.log = bv.create_logger(LOGGER_NAME)
+
+    def make_function_context_block(self, func):
+        # get function hlil listing
+        hlil_listing = format_code_listing(
+            func=func,
+            display_type=CodeDisplayType.HLIL,
+        )
+
+        # format function chunk
+        func_chunk_header = f"// Function: {func.name} @ {hex(func.start)}\n"
+        func_chunk_str = func_chunk_header + hlil_listing
+        return func_chunk_str
 
     def run(self):
         # get current functions here
@@ -31,14 +43,11 @@ class GatherQuickAnalysisContextTask(BackgroundTask):
             return
         curr_func = curr_funcs[0]
 
-        # grab hlil listing
-        hlil_listing_str = create_formatted_code_listing_string(
-            func=curr_func,
-            display_type=CodeDisplayType.HLIL,
-        )
+        # get context block for current function
+        curr_func_chunk = self.make_function_context_block(curr_func)
 
         # set result
-        self.result = hlil_listing_str
+        self.result = curr_func_chunk
 
         # mark finished
         self.finish()
@@ -50,7 +59,7 @@ def quick_analysis_cmd(bv: BinaryView):
     gather_task.run()
 
     # check if canceled
-    if gather_task.is_canceled():
+    if gather_task.cancelled:
         # too bad
         return
 
