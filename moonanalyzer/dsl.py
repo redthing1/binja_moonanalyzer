@@ -75,7 +75,7 @@ class VNameCommand:
 
 
 # Union type for type hinting a list of any command
-DslCommand = Union[CommentCommand, FNameCommand, VNameCommand]
+DSLCommand = Union[CommentCommand, FNameCommand, VNameCommand]
 
 
 # --- Lark Grammar Definition ---
@@ -134,7 +134,7 @@ _BNDSL_LARK_GRAMMAR = r"""
 # Each method corresponds to a rule in the grammar.
 class DslToDataclasses(Transformer):
     """
-    Transforms the Lark parse tree into a list of DslCommand dataclass instances.
+    Transforms the Lark parse tree into a list of DSLCommand dataclass instances.
     """
 
     def HEX_ADDRESS(self, token: Token) -> int:
@@ -177,7 +177,7 @@ class DslToDataclasses(Transformer):
             address=address, old_var_root=old_var_root, new_var_root=new_var_root
         )
 
-    def start(self, items: List[DslCommand]) -> List[DslCommand]:
+    def start(self, items: List[DSLCommand]) -> List[DSLCommand]:
         """
         Processes the top-level 'start' rule.
         Since 'start: command*' produces a list of processed 'command' items,
@@ -210,15 +210,15 @@ def _get_parser_and_transformer():
     return _parser_instance, _transformer_instance
 
 
-def parse_dsl(dsl_string: str) -> List[DslCommand]:
+def parse_bndsl(dsl_string: str) -> List[DSLCommand]:
     """
-    Parses a BN-DSL string and returns a list of DslCommand objects.
+    Parses a BN-DSL string and returns a list of DSLCommand objects.
 
     Args:
         dsl_string: The string containing the BN-DSL to parse.
 
     Returns:
-        A list of DslCommand dataclass instances representing the parsed commands.
+        A list of DSLCommand dataclass instances representing the parsed commands.
 
     Raises:
         LarkError: If there's a syntax error or other parsing issue in the dsl_string.
@@ -232,7 +232,7 @@ def parse_dsl(dsl_string: str) -> List[DslCommand]:
 
     try:
         parse_tree = parser.parse(dsl_string)
-        transformed_commands: List[DslCommand] = transformer.transform(parse_tree)
+        transformed_commands: List[DSLCommand] = transformer.transform(parse_tree)
         return transformed_commands
     except LarkError as e:
         raise e
@@ -250,8 +250,7 @@ if __name__ == "__main__":
         # This is a DSL comment and should be ignored by the parser.
         FNAME   0x006ebf00 check_and_load_license
         COMMENT 0x006ebf00 @"Entry: verify or load license blob.
-        This can span multiple lines.
-        And include \\"escaped quotes\\" or even a backslash \\\\ itself."
+        This can span multiple lines."
 
         # Another DSL comment
         COMMENT 0x006ebf58 @"Early-out if license already validated."
@@ -285,13 +284,18 @@ if __name__ == "__main__":
             print("Input DSL:")
             print(f"```\n{dsl_content.strip()}\n```")
             try:
-                parsed_commands = parse_dsl(dsl_content)
+                parsed_commands = parse_bndsl(dsl_content)
                 if parsed_commands:
                     print("\nParsed Commands:")
                     for cmd in parsed_commands:
                         # For printing, show escaped newlines to keep output clean
+                        escaped_cmd_text = (
+                            cmd.text.replace("\n", "\\n")
+                            if isinstance(cmd, CommentCommand)
+                            else None
+                        )
                         print(
-                            f"  {dataclasses.replace(cmd, text=cmd.text.replace('\\n', '\\\\n')) if isinstance(cmd, CommentCommand) else cmd}"
+                            f"  {dataclasses.replace(cmd, text=escaped_cmd_text) if escaped_cmd_text else cmd}"
                         )
                 else:
                     print(
@@ -310,7 +314,7 @@ if __name__ == "__main__":
         print("Input DSL:")
         print(f"```\n{malformed_dsl.strip()}\n```")
         try:
-            parsed_commands = parse_dsl(malformed_dsl)
+            parsed_commands = parse_bndsl(malformed_dsl)
             print("\nParsed Commands (should not happen for malformed):")
             for cmd in parsed_commands:
                 print(f"  {cmd}")
