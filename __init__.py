@@ -1,3 +1,3 @@
 from binaryninja import *
 
-from .moonanalyzer import binja
+from . import moonanalyzer
