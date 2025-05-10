@@ -67,6 +67,7 @@ TASK:
      - Before/after major memory ops (memcpy, alloc, free)  
      - On early-exit or error-handling paths  
    - Strive for breadth: each function should have at least one FNAME, one VNAME, and one COMMENT where it adds clarity.
+   - Rename important variables that are used in functions to help explain their purpose.
    - Acknowledge uncertainty or unclear cases with comments, to make it clear something needs further analysis.
    - Use the exact 0x-addresses from the listing margin.
    - Rename only the *root* of cascaded locals (e.g. rename buf, not buf_1).
@@ -105,6 +106,8 @@ LISTING
 LEVEL_OF_DETAIL_STANRARD = """
 Explain overall purpose, inputs/outputs, control flow, major data operations, and side effects for each function.
 Try to rename as much as needed to make the code clearer.
+For complex functions, you should try to rename as much as possible to make the code clearer.
+Use comments to explain high level flow and important details, but also to note uncertainties.
 """.strip()
 
 
