@@ -30,3 +30,45 @@ my_settings.register_setting(
         }
     ),
 )
+
+# string: custom analysis project context
+my_settings.register_setting(
+    "moonanalyzer.analysis_project_context",
+    json.dumps(
+        {
+            "title": "Analysis Project Context",
+            "description": "Project context for analysis context.",
+            "default": "",
+            "type": "string",
+            "ignore": ["SettingsUserScope"],
+        }
+    ),
+)
+
+# string: custom prompt additions
+my_settings.register_setting(
+    "moonanalyzer.custom_prompt_additions",
+    json.dumps(
+        {
+            "title": "Custom Prompt Additions",
+            "description": "Custom prompt additions for analysis context.",
+            "default": "",
+            "type": "string",
+            "ignore": ["SettingsUserScope"],
+        }
+    ),
+)
+
+# string: level of detail instructions
+my_settings.register_setting(
+    "moonanalyzer.level_of_detail_instructions",
+    json.dumps(
+        {
+            "title": "Level of Detail Instructions",
+            "description": "Level of detail instructions for analysis context.",
+            "default": "",
+            "type": "string",
+            "ignore": ["SettingsUserScope"],
+        }
+    ),
+)

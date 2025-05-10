@@ -28,8 +28,9 @@ class AnalysisParameters:
 
     max_depth: int
     max_function_count: int
-    custom_prompt_additions: str = ""  # for additional instructions to the llm
-    level_of_detail_instructions: str = ""  # for llm focus on detail
+    project_context: str = ""  # project context for the llm
+    custom_prompt_additions: str = ""  # additional instructions to the llm
+    level_of_detail_instructions: str = ""  # llm focus on detail
     initial_func_addr: Optional[int] = None
 
 
@@ -41,12 +42,14 @@ GATHER_CONTEXT_PROMPT_TEMPLATE = """You are a reverse-engineering assistant.
 {llm_instructions}
 
 TASK:
-1. For each function in the listing, write a focused explanation (up to 200 words) covering:
+1. For each function in the listing, write an explanation covering:
    - Overall purpose  
    - Inputs & outputs  
    - Control flow highlights (branches, loops)  
    - Major data operations (buffers, copies)  
    - Side effects, error paths, security notes  
+
+   For longer and more complex functions, first give a high-level overview, then explain each part of the function in more detail.   
 
 2. After all explanations, output exactly one fenced bndsl block.
    In that block, include only these statements, one per line:
@@ -99,7 +102,10 @@ LISTING
 """
 
 # default level of detail if none is provided by the user in custom mode.
-DEFAULT_LEVEL_OF_DETAIL = "Standard: Explain overall purpose, inputs/outputs, control flow, major data operations, and side effects for each function."
+LEVEL_OF_DETAIL_STANRARD = """
+Explain overall purpose, inputs/outputs, control flow, major data operations, and side effects for each function.
+Try to rename as much as needed to make the code clearer.
+""".strip()
 
 
 # - background task for gathering context
@@ -122,6 +128,7 @@ class GatherAnalysisContextTask(BackgroundTask):
             f"max_depth={self.params.max_depth}, "
             f"max_function_count={self.params.max_function_count if self.params.max_function_count > 0 else 'unlimited'}, "
             f"initial_addr={hex(self.params.initial_func_addr) if self.params.initial_func_addr is not None else 'current_offset'}, "
+            f"project_context='{self.params.project_context[:50].replace(chr(10), ' ')}...', "
             f"custom_prompt_additions='{self.params.custom_prompt_additions[:50].replace(chr(10), ' ')}...', "
             f"level_of_detail='{self.params.level_of_detail_instructions[:50].replace(chr(10), ' ')}...'"
         )
@@ -274,15 +281,20 @@ class GatherAnalysisContextTask(BackgroundTask):
         """
         instruction_lines = []
 
-        detail_to_use = self.params.level_of_detail_instructions.strip()
-        if not detail_to_use:
-            detail_to_use = DEFAULT_LEVEL_OF_DETAIL
-        instruction_lines.append(f"GUIDANCE ON LEVEL OF DETAIL:\n{detail_to_use}")
+        if self.params.project_context:
+            instruction_lines.append(
+                f"\nPROJECT CONTEXT:\n{self.params.project_context}"
+            )
 
         if self.params.custom_prompt_additions:
             instruction_lines.append(
                 f"\nADDITIONAL FOCUS AREAS:\n{self.params.custom_prompt_additions}"
             )
+
+        detail_to_use = self.params.level_of_detail_instructions.strip()
+        if not detail_to_use:
+            detail_to_use = LEVEL_OF_DETAIL_STANRARD
+        instruction_lines.append(f"GUIDANCE ON LEVEL OF DETAIL:\n{detail_to_use}")
 
         return "\n\n".join(instruction_lines)
 

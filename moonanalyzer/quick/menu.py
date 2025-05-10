@@ -91,6 +91,16 @@ def menu_custom_analysis_begin(bv: BinaryView):
         0, my_settings.get_integer("moonanalyzer.quick_analysis_max_function_count", bv)
     )
 
+    default_project_context = my_settings.get_string(
+        "moonanalyzer.analysis_project_context", bv
+    )
+    default_custom_prompt_additions = my_settings.get_string(
+        "moonanalyzer.custom_prompt_additions", bv
+    )
+    default_level_of_detail_instructions = my_settings.get_string(
+        "moonanalyzer.level_of_detail_instructions", bv
+    )
+
     depth_field = interaction.IntegerField(
         "Max Traversal Depth:",
         default=default_clamped_max_depth,
@@ -99,26 +109,38 @@ def menu_custom_analysis_begin(bv: BinaryView):
         "Max Functions:",
         default=default_max_func_count,
     )
+    project_context_field = interaction.MultilineTextField(
+        "Project Context (Optional):",
+        default=default_project_context,
+    )
     custom_prompt_field = interaction.MultilineTextField(
-        "Additional Focus Instructions (Optional):",
-        default="",
+        "Focus Instructions (Optional):",
+        default=default_custom_prompt_additions,
     )
     detail_level_field = interaction.MultilineTextField(
         f"Level of Detail (Optional):",
-        default="",
+        default=default_level_of_detail_instructions,
     )
 
-    form_fields = [depth_field, count_field, custom_prompt_field, detail_level_field]
+    form_fields = [
+        project_context_field,
+        custom_prompt_field,
+        detail_level_field,
+        depth_field,
+        count_field,
+    ]
 
     if interaction.get_form_input(form_fields, "Custom Analysis Parameters"):
         user_depth = max(0, min(depth_field.result, 3))
         user_count = max(0, count_field.result)
+        user_project_context = project_context_field.result.strip()
         user_custom_prompt = custom_prompt_field.result.strip()
         user_detail_level = detail_level_field.result.strip()
 
         params = AnalysisParameters(
             max_depth=user_depth,
             max_function_count=user_count,
+            project_context=user_project_context,
             custom_prompt_additions=user_custom_prompt,
             level_of_detail_instructions=user_detail_level,
             initial_func_addr=bv.offset,
