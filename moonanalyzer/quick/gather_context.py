@@ -28,7 +28,7 @@ TASK:
 2. After all explanations, output exactly one fenced bn-dsl block.
    In that block, include only these statements, one per line:
 
-     COMMENT <addr> """ any text, may span lines """
+     COMMENT <addr> @"any text, may span lines; the @ means it can be multiline"
      FNAME   <addr> <new_function_name>
      VNAME   <addr> <old_var_root> <new_var_root>
 
@@ -51,13 +51,13 @@ BN-DSL EXAMPLES:
 ```bn-dsl
 # Function rename + entry comment
 FNAME   0x006ebf00 check_and_load_license
-COMMENT 0x006ebf00 """Entry: verify or load license blob."""
+COMMENT 0x006ebf00 @"Entry: verify or load license blob."
 
 # Early-exit comment
-COMMENT 0x006ebf58 """Early-out if license already validated."""
+COMMENT 0x006ebf58 @"Early-out if license already validated."
 
 # Memory op comment
-COMMENT 0x006ebf64 """Copy user_buf into local buffer without length check."""
+COMMENT 0x006ebf64 @"Copy user_buf into local buffer without length check."
 
 # Variable rename (propagates to buffers)
 VNAME   0x006ebf64 user_buf license_env
