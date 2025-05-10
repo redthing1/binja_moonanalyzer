@@ -15,7 +15,7 @@ from ..listing import (
     LinearListingLine,
 )
 
-GATHER_CONTEXT_PROMPT_TEMPLATE = '''You are a reverse-engineering assistant.
+GATHER_CONTEXT_PROMPT_TEMPLATE = """You are a reverse-engineering assistant.
 
 TASK:
 1. For each function in the listing, write a focused explanation (up to 200 words) covering:
@@ -25,7 +25,7 @@ TASK:
    - Major data operations (buffers, copies)  
    - Side effects, error paths, security notes  
 
-2. After all explanations, output exactly one fenced bn-dsl block.
+2. After all explanations, output exactly one fenced bndsl block.
    In that block, include only these statements, one per line:
 
      COMMENT <addr> @"any text, may span lines; the @ means it can be multiline"
@@ -48,7 +48,7 @@ TASK:
    - Multi-line comments must use triple quotes.
 
 BN-DSL EXAMPLES:
-```bn-dsl
+```bndsl
 # Function rename + entry comment
 FNAME   0x006ebf00 check_and_load_license
 COMMENT 0x006ebf00 @"Entry: verify or load license blob."
@@ -65,11 +65,14 @@ VNAME   0x006ebf64 user_buf license_env
 # Rename a generic flag variable
 VNAME   0x006ed104 var_3d9  license_status_flag
 
+CONTEXT SETTINGS:
+{context_settings}
+
 LISTING
 ```hlil
 {listing}
 ```
-'''
+"""
 
 
 class GatherQuickAnalysisContextTask(BackgroundTask):
@@ -272,7 +275,13 @@ class GatherQuickAnalysisContextTask(BackgroundTask):
         listing_str = "\n\n".join(all_context_blocks)
 
         # let's format it all into a neat result string/prompt
-        self.result_string = GATHER_CONTEXT_PROMPT_TEMPLATE.format(listing=listing_str)
+        context_settings = (
+            f"max_depth={self.max_depth}, max_function_count={self.max_function_count}"
+        )
+        self.result_string = GATHER_CONTEXT_PROMPT_TEMPLATE.format(
+            context_settings=context_settings,
+            listing=listing_str,
+        )
 
         if not self.cancelled:
             self.log.log_info("context gathering finished.")
