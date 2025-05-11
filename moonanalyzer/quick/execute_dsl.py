@@ -1,6 +1,7 @@
 from typing import List, Set, Optional, Deque
 import collections
 import traceback
+import re
 
 import binaryninja
 from binaryninja import BinaryView, Function, PluginCommand, BackgroundTask, Settings
@@ -16,7 +17,23 @@ class ExecuteBNDSLTask(BackgroundTask):
         super().__init__("Executing BN-DSL...", can_cancel=True)
         self.bv: BinaryView = bv
         self.log = bv.create_logger(LOGGER_NAME)
-        self.dsl_script: str = dsl_script
+        self.dsl_script: str = self._extract_bndsl_code_block(dsl_script)
+
+    def _extract_bndsl_code_block(self, raw_dsl_script: str) -> str:
+        codeblock_match = re.search(
+            r"```(?:bndsl|BNDSL)\s*\n(.*?)```",
+            raw_dsl_script,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if codeblock_match:
+            # extract the content of the code block
+            self.log.log_debug(
+                f"extracted bndsl code block from markdown (len={len(codeblock_match.group(1))})"
+            )
+            return codeblock_match.group(1).strip()
+        else:
+            # if no code block is found, return the original script
+            return raw_dsl_script.strip()
 
     def run(self):
         # parse the dsl script
