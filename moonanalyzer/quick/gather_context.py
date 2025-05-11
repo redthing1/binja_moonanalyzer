@@ -93,6 +93,9 @@ VNAME   0x006ebf64 user_buf license_env
 VNAME   0x006ed104 var_3d9  license_status_flag
 ```
 
+FILE METADATA:
+{file_metadata}
+
 ANALYSIS SCOPE:
 {analysis_scope}
 
@@ -103,11 +106,12 @@ LISTING
 """
 
 # default level of detail if none is provided by the user in custom mode.
-LEVEL_OF_DETAIL_STANRARD = """
+LEVEL_OF_DETAIL_STANDARD = """
 Explain overall purpose, inputs/outputs, control flow, major data operations, and side effects for each function.
 Try to rename as much as needed to make the code clearer.
 For complex functions, you should try to rename as much as possible to make the code clearer.
 Use comments to explain high level flow and important details, but also to note uncertainties.
+Please be sure to provide explanations of the functions before the BN-DSL block.
 """.strip()
 
 
@@ -276,7 +280,7 @@ class GatherAnalysisContextTask(BackgroundTask):
 
         return initial_funcs[0]
 
-    def _build_llm_instructions_section(self) -> str:
+    def _build_llm_instructions_prompt(self) -> str:
         """
         constructs the instructional part of the prompt for the llm,
         including level of detail and any custom focus instructions.
@@ -296,12 +300,12 @@ class GatherAnalysisContextTask(BackgroundTask):
 
         detail_to_use = self.params.level_of_detail_instructions.strip()
         if not detail_to_use:
-            detail_to_use = LEVEL_OF_DETAIL_STANRARD
+            detail_to_use = LEVEL_OF_DETAIL_STANDARD
         instruction_lines.append(f"GUIDANCE ON LEVEL OF DETAIL:\n{detail_to_use}")
 
         return "\n\n".join(instruction_lines)
 
-    def _build_analysis_scope_section(self) -> str:
+    def _build_analysis_scope_prompt(self) -> str:
         """
         constructs the 'analysis scope' part of the prompt, detailing depth and count limits.
         this informs the llm about the extent of the provided code listing.
@@ -312,16 +316,25 @@ class GatherAnalysisContextTask(BackgroundTask):
         ]
         return "\n".join(scope_lines)
 
+    def _build_file_metadata_prompt(self) -> str:
+        """
+        constructs the file metadata section of the prompt, including the binary name and architecture.
+        this section is added to the top of the prompt.
+        """
+        bv_name = self.bv.file.original_filename
+        bv_arch = self.bv.arch.name
+
+        return f'Binary: Name="{bv_name}", Architecture: {bv_arch}'
+
     def _build_final_prompt(self, listing_str: str) -> str:
         """
         assembles the complete prompt string using the main template and dynamic sections.
         """
-        llm_instructions = self._build_llm_instructions_section()
-        analysis_scope = self._build_analysis_scope_section()
 
         return GATHER_CONTEXT_PROMPT_TEMPLATE.format(
-            llm_instructions=llm_instructions,
-            analysis_scope=analysis_scope,
+            llm_instructions=self._build_llm_instructions_prompt(),
+            analysis_scope=self._build_analysis_scope_prompt(),
+            file_metadata=self._build_file_metadata_prompt(),
             listing=listing_str,
         )
 
