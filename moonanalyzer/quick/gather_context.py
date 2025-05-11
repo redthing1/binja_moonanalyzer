@@ -47,9 +47,9 @@ TASK:
    - Inputs & outputs  
    - Control flow highlights (branches, loops)  
    - Major data operations (buffers, copies)  
-   - Side effects, error paths, security notes  
+   - Side effects, error paths
 
-   For longer and more complex functions, first give a high-level overview, then explain each part of the function in more detail.   
+   For longer and more complex functions, first give a high-level overview, then explain each part of the function in more detail.
 
 2. After all explanations, output exactly one fenced bndsl block.
    In that block, include only these statements, one per line:
@@ -73,6 +73,7 @@ TASK:
    - Rename only the *root* of cascaded locals (e.g. rename buf, not buf_1).
    - Use snake_case, verb-style names (≤ 40 chars).
    - Multi-line comments must use triple quotes.
+   - Note that COMMENT overwrites existing comments, so you can use it to modify existing comments.
 
 BN-DSL EXAMPLES:
 ```bndsl
