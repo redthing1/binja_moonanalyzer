@@ -50,6 +50,7 @@ TASK:
    - Side effects, error paths
 
    For longer and more complex functions, first give a high-level overview, then explain each part of the function in more detail.
+   When you clearly identify simple standard library functions, rename them and their arguments to aid understanding, but skip details.
 
 2. After all explanations, output exactly one fenced bndsl block.
    In that block, include only these statements, one per line:
