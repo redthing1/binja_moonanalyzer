@@ -86,7 +86,8 @@ def menu_custom_analysis_begin(bv: BinaryView):
     default_raw_max_depth = my_settings.get_integer(
         "moonanalyzer.quick_analysis_context_depth", bv
     )
-    default_clamped_max_depth = max(0, min(default_raw_max_depth, 3))
+    # default_clamped_max_depth = max(0, min(default_raw_max_depth, 3))
+    default_clamped_max_depth = max(0, default_raw_max_depth)
     default_max_func_count = max(
         0, my_settings.get_integer("moonanalyzer.quick_analysis_max_function_count", bv)
     )
@@ -131,7 +132,8 @@ def menu_custom_analysis_begin(bv: BinaryView):
     ]
 
     if interaction.get_form_input(form_fields, "Custom Analysis Parameters"):
-        user_depth = max(0, min(depth_field.result, 3))
+        # user_depth = max(0, min(depth_field.result, 3))
+        user_depth = max(0, depth_field.result)
         user_count = max(0, count_field.result)
         user_project_context = project_context_field.result.strip()
         user_custom_prompt = custom_prompt_field.result.strip()
