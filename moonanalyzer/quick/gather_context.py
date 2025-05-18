@@ -1,4 +1,4 @@
-from typing import List, Set, Optional, Deque
+from typing import List, Set, Optional, Deque, Dict
 import collections
 import traceback
 from dataclasses import dataclass
@@ -117,6 +117,35 @@ Please be sure to provide explanations of the functions before the BN-DSL block.
 """.strip()
 
 
+# - dataclasses for managing function discovery context
+@dataclass(
+    frozen=True
+)  # frozen=True makes instances hashable for sets if needed, and immutable
+class DiscoveredFunctionInfo:
+    """
+    holds a function and the context of its discovery.
+    """
+
+    func: Function
+    reason_type: str  # e.g., "initial", "callee", "xref"
+    source_function: Optional[Function] = (
+        None  # function from which this one was discovered
+    )
+    source_address: Optional[int] = (
+        None  # specific address in source_function (e.g., xref location)
+    )
+
+
+@dataclass
+class QueueEntry:
+    """
+    represents an entry in the bfs queue.
+    """
+
+    discovered_info: DiscoveredFunctionInfo
+    depth: int
+
+
 # - background task for gathering context
 class GatherAnalysisContextTask(BackgroundTask):
     def __init__(
@@ -142,44 +171,66 @@ class GatherAnalysisContextTask(BackgroundTask):
             f"level_of_detail='{self.params.level_of_detail_instructions[:50].replace(chr(10), ' ')}...'"
         )
 
-    def _make_function_context_block(self, func: Function) -> str:
+    def _make_function_context_block(
+        self, discovered_info: DiscoveredFunctionInfo
+    ) -> str:
         """
         creates a formatted string block for a single function, including its
-        hlil listing.
+        hlil listing and a header indicating why it was included.
         """
+        func = discovered_info.func
+        reason_comment_suffix = ""
+        if discovered_info.reason_type == "callee" and discovered_info.source_function:
+            reason_comment_suffix = f"    // (called by {discovered_info.source_function.name} @ {hex(discovered_info.source_function.start)})"
+        elif (
+            discovered_info.reason_type == "xref"
+            and discovered_info.source_function
+            and discovered_info.source_address is not None
+        ):
+            reason_comment_suffix = f"    // (code xref from {discovered_info.source_function.name} @ {hex(discovered_info.source_address)})"
+        # for "initial", no extra comment suffix is added by default.
+
+        func_chunk_header = (
+            f"// Function: {func.name} @ {hex(func.start)}{reason_comment_suffix}\n"
+        )
         try:
             hlil_listing = format_code_listing(
                 func=func,
                 display_type=CodeDisplayType.HLIL,
-            )
-            func_chunk_header = (
-                f"// Function: {func.name} @ {hex(func.start)}\n"
             )
             return func_chunk_header + hlil_listing
         except Exception as e:
             self.log.log_error(
                 f"error generating listing for function {func.name} (0x{func.start:x}): {e}\n{traceback.format_exc()}"
             )
-            return f"// Error generating listing for function: {func.name} @ {hex(func.start)}\n// Details: {e}\n"
+            # still include the header even if listing fails
+            return (
+                func_chunk_header
+                + f"// Error generating listing for function: {func.name} @ {hex(func.start)}\n// Details: {e}\n"
+            )
 
-    def _collect_functions_bfs(self, start_function: Function) -> List[Function]:
+    def _collect_functions_bfs(
+        self, start_function: Function
+    ) -> List[DiscoveredFunctionInfo]:
         """
         collects functions using breadth-first search (bfs) starting from start_function,
         respecting the depth and count limits defined in self.params.
         traversal includes direct callees and functions targeted by code cross-references
         originating from instructions within the visited functions.
+        returns a list of DiscoveredFunctionInfo objects.
         """
-        collected_functions: List[Function] = []
-        # queue stores tuples of (function_object, current_depth)
-        queue: Deque[tuple[Function, int]] = collections.deque()
+        collected_functions_info: List[DiscoveredFunctionInfo] = []
+        queue: Deque[QueueEntry] = collections.deque()
         # visited_function_addresses stores addresses of functions already added to queue or collected_functions
         visited_function_addresses: Set[int] = set()
 
         if start_function:
-            queue.append((start_function, 0))
+            initial_discovery = DiscoveredFunctionInfo(
+                func=start_function, reason_type="initial"
+            )
+            queue.append(QueueEntry(discovered_info=initial_discovery, depth=0))
             visited_function_addresses.add(start_function.start)
         else:
-            # this case should ideally be prevented by _determine_entry_function returning none earlier
             self.log.log_error("bfs collection started without a valid start_function.")
             return []
 
@@ -190,100 +241,101 @@ class GatherAnalysisContextTask(BackgroundTask):
 
             if (
                 self.params.max_function_count > 0
-                and len(collected_functions) >= self.params.max_function_count
+                and len(collected_functions_info) >= self.params.max_function_count
             ):
                 self.log.log_info(
                     f"reached max function count ({self.params.max_function_count}). stopping collection."
                 )
                 break
 
-            current_func, current_depth = queue.popleft()
-            collected_functions.append(current_func)
+            current_queue_entry = queue.popleft()
+            current_discovered_info = current_queue_entry.discovered_info
+            current_func = current_discovered_info.func
+            current_depth = current_queue_entry.depth
 
-            # if max_depth is reached for current_func, do not explore its neighbors (callees or xrefs)
+            collected_functions_info.append(current_discovered_info)
+
             if current_depth >= self.params.max_depth:
                 continue
 
-            # use a temporary set to gather all potential distinct neighbors for this current_func
-            # before checking against the global visited_function_addresses and adding to queue.
-            # this avoids redundant checks if a function is both a callee and an xref target.
-            potential_neighbors_for_current_func: Set[Function] = set()
+            # this list will store DiscoveredFunctionInfo objects for neighbors to be added to the queue
+            neighbors_to_consider: List[DiscoveredFunctionInfo] = []
 
             # - 1. collect direct callees
             try:
                 for callee_func in current_func.callees:
                     if self.cancelled:
                         break
-                    # avoid self-reference and ensure the callee_func object is valid
                     if callee_func and callee_func.start != current_func.start:
-                        potential_neighbors_for_current_func.add(callee_func)
+                        # for callees, source_address is not the call site, but the start of the callee itself for simplicity
+                        # the source_function is current_func.
+                        discovery_info = DiscoveredFunctionInfo(
+                            func=callee_func,
+                            reason_type="callee",
+                            source_function=current_func,
+                        )
+                        neighbors_to_consider.append(discovery_info)
             except Exception as e:
                 self.log.log_error(
                     f"error processing callees for function {current_func.name} (0x{current_func.start:x}): {e}\n{traceback.format_exc()}"
                 )
-            # check cancellation after processing all callees for current_func
             if self.cancelled:
                 break
 
-            # - 2. collect functions targeted by code xrefs from instructions within current_func
+            # - 2. collect functions targeted by code xrefs
             try:
-                # function.instructions yields tuples of (list_of_tokens, instruction_address)
                 for _instruction_tokens, instr_addr in current_func.instructions:
                     if self.cancelled:
                         break
-
-                    # get code references *from* this specific instruction's address.
-                    # `func` and `arch` parameters scope the interpretation of the instruction at `instr_addr`.
-                    # `get_code_refs_from` returns a list[int] of target addresses.
                     refs_from_instr: List[int] = self.bv.get_code_refs_from(
                         addr=instr_addr, func=current_func, arch=current_func.arch
                     )
-
                     for target_addr in refs_from_instr:
                         if self.cancelled:
                             break
-
-                        # `get_function_at` checks if a function *starts* at target_addr.
-                        # `current_func.platform` is used as a hint if multiple platforms might exist for the target address.
                         target_func_at_xref = self.bv.get_function_at(
                             addr=target_addr, plat=current_func.platform
                         )
-
-                        # ensure it's a valid function (which `get_function_at` ensures by returning a function object)
-                        # and that it's not a self-reference.
                         if (
                             target_func_at_xref
                             and target_func_at_xref.start != current_func.start
                         ):
-                            potential_neighbors_for_current_func.add(
-                                target_func_at_xref
+                            discovery_info = DiscoveredFunctionInfo(
+                                func=target_func_at_xref,
+                                reason_type="xref",
+                                source_function=current_func,
+                                source_address=instr_addr,  # this is the address of the instruction *containing* the xref
                             )
-
-                    # check after processing all targets for one instruction
+                            neighbors_to_consider.append(discovery_info)
                     if self.cancelled:
                         break
             except Exception as e:
                 self.log.log_error(
                     f"error processing code xrefs for function {current_func.name} (0x{current_func.start:x}): {e}\n{traceback.format_exc()}"
                 )
-            # check after processing all instructions for current_func
             if self.cancelled:
                 break
 
             # add unique, unvisited neighbors to the main queue
-            for neighbor_func in potential_neighbors_for_current_func:
+            # use a set to track neighbors added in this iteration to avoid duplicates from neighbors_to_consider
+            # (e.g. if a function is both a callee and xref target from the same current_func)
+            processed_neighbor_starts_this_iteration: Set[int] = set()
+            for neighbor_discovered_info in neighbors_to_consider:
                 if self.cancelled:
                     break
 
+                neighbor_func = neighbor_discovered_info.func
+                if neighbor_func.start in processed_neighbor_starts_this_iteration:
+                    continue
+                processed_neighbor_starts_this_iteration.add(neighbor_func.start)
+
                 if neighbor_func.start not in visited_function_addresses:
-                    # this logging informs if the sum of (collected_functions + current_queue_length)
-                    # is already at or exceeding max_function_count, but the function hasn't
-                    # strictly been collected yet. the actual hard limit is checked at the start of the loop.
                     if (
                         self.params.max_function_count > 0
-                        and (len(collected_functions) + len(queue))
+                        and (len(collected_functions_info) + len(queue))
                         >= self.params.max_function_count
-                        and len(collected_functions) < self.params.max_function_count
+                        and len(collected_functions_info)
+                        < self.params.max_function_count
                     ):
                         self.log.log_info(
                             f"approaching max function count ({self.params.max_function_count}) while adding neighbor "
@@ -291,24 +343,28 @@ class GatherAnalysisContextTask(BackgroundTask):
                         )
 
                     visited_function_addresses.add(neighbor_func.start)
-                    queue.append((neighbor_func, current_depth + 1))
+                    queue.append(
+                        QueueEntry(
+                            discovered_info=neighbor_discovered_info,
+                            depth=current_depth + 1,
+                        )
+                    )
 
-            # final check for this iteration of the main while loop
             if self.cancelled:
                 break
 
-        # final truncation: although the loop entry check handles most cases,
-        # this ensures strict adherence if the last batch of neighbors pushed the count over.
         if (
             self.params.max_function_count > 0
-            and len(collected_functions) > self.params.max_function_count
+            and len(collected_functions_info) > self.params.max_function_count
         ):
-            collected_functions = collected_functions[: self.params.max_function_count]
+            collected_functions_info = collected_functions_info[
+                : self.params.max_function_count
+            ]
             self.log.log_info(
                 f"function collection truncated to ensure max count of {self.params.max_function_count} functions."
             )
 
-        return collected_functions
+        return collected_functions_info
 
     def _determine_entry_function(self) -> Optional[Function]:
         """
@@ -318,9 +374,6 @@ class GatherAnalysisContextTask(BackgroundTask):
         start_addr: Optional[int] = self.params.initial_func_addr
 
         if start_addr is None:
-            # `bv.offset` is not a standard public api attribute.
-            # it is checked here for compatibility if it was part of the user's original environment.
-            # `bv.current_function` is the more standard way to get contextually relevant function.
             if hasattr(self.bv, "offset") and self.bv.offset is not None:  # type: ignore [attr-defined]
                 start_addr = self.bv.offset  # type: ignore [attr-defined]
                 self.log.log_debug(
@@ -339,20 +392,16 @@ class GatherAnalysisContextTask(BackgroundTask):
                     )
                     return None
 
-        # this check should be redundant if the logic above is complete, but serves as a safeguard.
         if start_addr is None:
             self.log.log_error(
                 "failed to determine a valid starting address after all checks."
             )
             return None
 
-        # try to find functions containing the start_addr first.
-        # this handles cases where start_addr might be in the middle of a function.
         initial_funcs: List[Function] = self.bv.get_functions_containing(
             addr=start_addr
         )
         if not initial_funcs:
-            # if no function *contains* start_addr, check if a function *starts* at start_addr.
             func_at_start = self.bv.get_function_at(start_addr)
             if func_at_start:
                 initial_funcs = [func_at_start]
@@ -389,10 +438,6 @@ class GatherAnalysisContextTask(BackgroundTask):
         return "\n\n".join(instruction_lines)
 
     def _build_analysis_scope_prompt(self) -> str:
-        """
-        constructs the 'analysis scope' part of the prompt, detailing depth and count limits.
-        this informs the llm about the extent of the provided code listing.
-        """
         scope_lines = [
             f"Max Traversal Depth for Callees/Xrefs: {self.params.max_depth}",
             f"Max Functions Included in Listing: {self.params.max_function_count if self.params.max_function_count > 0 else 'Unlimited'}",
@@ -402,7 +447,6 @@ class GatherAnalysisContextTask(BackgroundTask):
     def _build_file_metadata_prompt(self) -> str:
         bv_name = self.bv.file.original_filename
         bv_arch_name = "Unknown"
-        # self.bv.arch can sometimes be none, especially for unanalyzed or raw views
         if self.bv.arch:
             bv_arch_name = self.bv.arch.name
         return f'Binary: Name="{bv_name}", Architecture: {bv_arch_name}'
@@ -429,32 +473,30 @@ class GatherAnalysisContextTask(BackgroundTask):
                 f"context gathering initiated for function: {entry_function.name} at {hex(entry_function.start)}"
             )
 
-            all_functions_to_process: List[Function] = self._collect_functions_bfs(
-                entry_function
+            # _collect_functions_bfs now returns List[DiscoveredFunctionInfo]
+            all_discovered_functions_info: List[DiscoveredFunctionInfo] = (
+                self._collect_functions_bfs(entry_function)
             )
 
-            # check if cancelled during bfs
             if self.cancelled:
                 self.log.log_info("task cancelled during function collection phase.")
                 self.result_string = "Analysis cancelled during function collection."
                 return
 
-            # if not cancelled, but bfs returned empty (e.g. start func has no neighbors or limits too restrictive)
-            if not all_functions_to_process:
+            if not all_discovered_functions_info and not self.cancelled:
                 self.log.log_warn(
                     "no functions were collected for analysis (bfs returned empty)."
                 )
                 self.result_string = "No functions collected. Start function may have no neighbors or limits are too restrictive."
-                # continue to prompt generation, which will then be empty or show this message.
 
             self.log.log_info(
-                f"collected {len(all_functions_to_process)} unique functions for context generation."
+                f"collected {len(all_discovered_functions_info)} unique functions with reasons for context generation."
             )
 
             all_context_blocks: List[str] = []
-            total_functions_to_render = len(all_functions_to_process)
-            for i, func_to_analyze in enumerate(all_functions_to_process):
-                # check if cancelled during context block generation phase
+            total_functions_to_render = len(all_discovered_functions_info)
+            # iterate over the collected DiscoveredFunctionInfo objects
+            for i, discovered_info in enumerate(all_discovered_functions_info):
                 if self.cancelled:
                     self.log.log_info(
                         "task cancelled during context block generation phase."
@@ -464,13 +506,12 @@ class GatherAnalysisContextTask(BackgroundTask):
                     )
                     break
 
-                self.progress = f"generating listing for function {i+1}/{total_functions_to_render}: {func_to_analyze.name}"
-                block = self._make_function_context_block(func_to_analyze)
+                self.progress = f"generating listing for function {i+1}/{total_functions_to_render}: {discovered_info.func.name}"
+                # pass the entire DiscoveredFunctionInfo object
+                block = self._make_function_context_block(discovered_info)
                 all_context_blocks.append(block)
 
-            # only build prompt if not cancelled
             if not self.cancelled:
-                # if no blocks were generated and no prior error/warning message exists
                 if not all_context_blocks and not self.result_string:
                     self.result_string = (
                         "No function listings generated to create a prompt."
@@ -478,14 +519,12 @@ class GatherAnalysisContextTask(BackgroundTask):
                     self.log.log_info(
                         "prompt generation skipped as no listings were created."
                     )
-                # if blocks exist, build the prompt
                 elif all_context_blocks:
                     listing_str = "\n\n".join(all_context_blocks)
                     self.result_string = self._build_final_prompt(listing_str)
                     self.log.log_info(
                         "context gathering and prompt generation finished successfully."
                     )
-                # if result_string was already set (e.g., by empty bfs), that message will be used.
 
         except Exception as e:
             self.log.log_error(
