@@ -32,6 +32,9 @@ class AnalysisParameters:
     custom_prompt_additions: str = ""  # additional instructions to the llm
     level_of_detail_instructions: str = ""  # llm focus on detail
     initial_func_addr: Optional[int] = None
+    listing_only: bool = (
+        False  # if true, only generate hlil listings without the prompt
+    )
 
 
 # - prompt template
@@ -169,6 +172,7 @@ class GatherAnalysisContextTask(BackgroundTask):
             f"project_context='{self.params.project_context[:50].replace(chr(10), ' ')}...', "
             f"custom_prompt_additions='{self.params.custom_prompt_additions[:50].replace(chr(10), ' ')}...', "
             f"level_of_detail='{self.params.level_of_detail_instructions[:50].replace(chr(10), ' ')}...'"
+            f"listing_only={self.params.listing_only}"
         )
 
     def _make_function_context_block(
@@ -521,10 +525,17 @@ class GatherAnalysisContextTask(BackgroundTask):
                     )
                 elif all_context_blocks:
                     listing_str = "\n\n".join(all_context_blocks)
-                    self.result_string = self._build_final_prompt(listing_str)
-                    self.log.log_info(
-                        "context gathering and prompt generation finished successfully."
-                    )
+                    if self.params.listing_only:
+                        # if listing_only is True, only return the hlil listings
+                        self.result_string = listing_str
+                        self.log.log_info(
+                            "listing-only mode enabled. returning hlil listings only."
+                        )
+                    else:
+                        self.result_string = self._build_final_prompt(listing_str)
+                        self.log.log_info(
+                            "context gathering and prompt generation finished successfully."
+                        )
 
         except Exception as e:
             self.log.log_error(

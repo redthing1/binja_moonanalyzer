@@ -178,6 +178,55 @@ def menu_execute_dsl(bv: BinaryView):
         return
 
 
+def menu_gather_listing_context(bv: BinaryView):
+    # just gather hlil listing info without the promt
+    log = bv.create_logger(LOGGER_NAME)
+    log.log_info("listing context command triggered.")
+
+    default_max_depth = max(
+        0, my_settings.get_integer("moonanalyzer.quick_analysis_context_depth", bv)
+    )
+    default_max_func_count = max(
+        0, my_settings.get_integer("moonanalyzer.quick_analysis_max_function_count", bv)
+    )
+    depth_field = interaction.IntegerField(
+        "Max Traversal Depth:",
+        default=default_max_depth,
+    )
+    count_field = interaction.IntegerField(
+        "Max Functions:",
+        default=default_max_func_count,
+    )
+
+    form_fields = [depth_field, count_field]
+
+    if interaction.get_form_input(form_fields, "Listing Context Parameters"):
+        user_depth = max(0, depth_field.result)
+        user_count = max(0, count_field.result)
+
+        params = AnalysisParameters(
+            max_depth=user_depth,
+            max_function_count=user_count,
+            initial_func_addr=bv.offset,
+            listing_only=True,
+        )
+
+        gather_task = GatherAnalysisContextTask(bv, params)
+        gather_task.run()
+
+        # check if cancelled
+        if gather_task.cancelled:
+            # too bad
+            return
+
+        # show results in an editable multiline text field
+        prompt_title = f"Listing Context"
+        context_text_field = binaryninja.interaction.MultilineTextField(
+            prompt="", default=gather_task.result_string
+        )
+        binaryninja.interaction.get_form_input([context_text_field], prompt_title)
+
+
 PluginCommand.register(
     "MoonAnalyzer\\Analysis Context (Quick)",
     "Gather context for the current function and its callees using default setting",
@@ -194,4 +243,10 @@ PluginCommand.register(
     "MoonAnalyzer\\Execute BN-DSL",
     "Execute BN-DSL script to annotate functions",
     menu_execute_dsl,
+)
+
+PluginCommand.register(
+    "MoonAnalyzer\\Listing Context (HLIL)",
+    "Gather context for the current function and its callees using custom settings",
+    menu_gather_listing_context,
 )
