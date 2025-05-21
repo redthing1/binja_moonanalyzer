@@ -13,15 +13,18 @@ A self-contained module for parsing the BN-DSL (BinaryNinja Domain Specific Lang
 
 This module uses the Lark parsing library to parse a textual DSL into structured
 Python objects (dataclasses). The DSL is designed for representing reverse
-engineering annotations like function renames, variable renames, and comments
-at specific addresses.
+engineering annotations like function renames, variable renames, comments,
+and assembly patches.
 
 The DSL supports:
 - FNAME <func_addr> <new_function_name>
 - VNAME <func_addr> <old_var_root> <new_var_root>
 - COMMENT <addr> @" any text, may span lines and include \"escaped quotes\" "
 - DNAME <old_global_name> <new_global_name>
-- Line comments starting with '#' or '//' within the DSL itself.
+- VTYPE <func_addr> <var_identifier> "type_string"
+- PATCH <addr> @"assembly_code_string"
+
+Line comments starting with '#' or '//' within the DSL itself are ignored.
 
 Requires the 'lark' library: pip install lark
 """
@@ -56,10 +59,10 @@ class CommentCommand:
     command_type: str = "COMMENT"
 
     def to_dsl_string(self) -> str:
-        # decide whether to use normal or multiline string based on content
-        if "\n" in self.text:
+        if "\n" in self.text or '"' in self.text:
             # multiline string: use @"..." format
-            return f'COMMENT 0x{self.address:x} @"{self.text}"'
+            escaped_text = self.text.replace('"', '\\"')
+            return f'COMMENT 0x{self.address:x} @"{escaped_text}"'
         else:
             # normal string: use regular quotes
             return f'COMMENT 0x{self.address:x} "{self.text}"'
@@ -122,12 +125,31 @@ class VTypeCommand:
     command_type: str = "VTYPE"
 
     def to_dsl_string(self) -> str:
-        return f'VTYPE 0x{self.function_address:x} {self.var_identifier} "{self.type_string}"'
+        if "\n" in self.type_string or '"' in self.type_string:
+            escaped_type_string = self.type_string.replace('"', '\\"')
+            return f'VTYPE 0x{self.function_address:x} {self.var_identifier} @"{escaped_type_string}"'
+        else:
+            return f'VTYPE 0x{self.function_address:x} {self.var_identifier} "{self.type_string}"'
+
+
+@dataclasses.dataclass
+class PatchCommand:
+    """
+    Represents a PATCH command in the DSL for applying assembly patches.
+    """
+
+    address: int
+    assembly_code: str
+    command_type: str = "PATCH"
+
+    def to_dsl_string(self) -> str:
+        escaped_assembly_code = self.assembly_code.replace('"', '\\"')
+        return f'PATCH 0x{self.address:x} @"{escaped_assembly_code}"'
 
 
 # union type for type hinting a list of any command
 DSLCommand = Union[
-    CommentCommand, FNameCommand, VNameCommand, DNameCommand, VTypeCommand
+    CommentCommand, FNameCommand, VNameCommand, DNameCommand, VTypeCommand, PatchCommand
 ]
 
 
@@ -140,17 +162,19 @@ _BNDSL_LARK_GRAMMAR = r"""
            | vname_stmt
            | dname_stmt
            | vtype_stmt
+           | patch_stmt
 
     comment_stmt : "COMMENT"i HEX_ADDRESS (AT_STRING | NORMAL_STRING)
     fname_stmt   : "FNAME"i HEX_ADDRESS IDENTIFIER
     vname_stmt   : "VNAME"i HEX_ADDRESS IDENTIFIER IDENTIFIER
     dname_stmt   : "DNAME"i IDENTIFIER IDENTIFIER
     vtype_stmt   : "VTYPE"i HEX_ADDRESS IDENTIFIER (AT_STRING | NORMAL_STRING)
+    patch_stmt   : "PATCH"i HEX_ADDRESS (AT_STRING | NORMAL_STRING)
 
     HEX_ADDRESS: /0x[0-9a-fA-F]+/
-    IDENTIFIER: /[a-zA-Z_][a-zA-Z0-9_]*/
-    AT_STRING : /@"[^"]*"/
-    NORMAL_STRING : /"[^"\n]*"/
+    IDENTIFIER: /[a-zA-Z_][a-zA-Z0-9_.:\-<>?]*/  // Expanded IDENTIFIER to allow more chars often found in symbols
+    AT_STRING : /@"(?:[^"\\]|\\.)*"/             // Allows escaped quotes \" inside @"..."
+    NORMAL_STRING : /"(?:[^"\\]|\\.)*"/         // Allows escaped quotes \" inside "..."
 
     %import common.WS
     %ignore WS
@@ -160,7 +184,7 @@ _BNDSL_LARK_GRAMMAR = r"""
 
 
 # - Lark transformer
-class DSLToDataclasses(Transformer):  # Renamed from DslToDataclasses
+class DSLToDataclasses(Transformer):
     """
     Transforms the Lark parse tree into a list of DSLCommand dataclass instances.
     """
@@ -174,12 +198,12 @@ class DSLToDataclasses(Transformer):  # Renamed from DslToDataclasses
         return str(token.value)
 
     def AT_STRING(self, token: Token) -> str:
-        # strip leading @" and trailing " from the captured string
-        return token.value[2:-1]
+        # strip leading @" and trailing " and unescape internal quotes
+        return token.value[2:-1].replace('\\"', '"')
 
     def NORMAL_STRING(self, token: Token) -> str:
-        # strip leading " and trailing " from the captured string
-        return token.value[1:-1]
+        # strip leading " and trailing " and unescape internal quotes
+        return token.value[1:-1].replace('\\"', '"')
 
     @v_args(inline=True)
     def comment_stmt(self, address: int, text: str) -> CommentCommand:
@@ -216,24 +240,19 @@ class DSLToDataclasses(Transformer):  # Renamed from DslToDataclasses
         )
 
     @v_args(inline=True)
+    def patch_stmt(self, address: int, assembly_code: str) -> PatchCommand:
+        return PatchCommand(address=address, assembly_code=assembly_code)
+
+    @v_args(inline=True)
     def command(self, dsl_command_instance: DSLCommand) -> DSLCommand:
         return dsl_command_instance
 
     def start(self, items: list) -> List[DSLCommand]:
-        # 'items' will be a list of the results from the 'command' rule.
-        # if there's only one command, 'items' might be a list containing one element.
-        # this method just needs to return that list.
-        # the type hint for items is already 'list' from Lark's perspective if command* is matched.
-        # the key is that 'command*' should always produce a list for its parent rule.
-        # if Lark sometimes returns a single item when `command*` matches only one `command`,
-        # we can explicitly check and wrap.
+        if items is None:
+            return []
         if not isinstance(items, list):
-            # this case *shouldn't* happen if 'command*' correctly yields a list of one,
-            # but as a safeguard:
-            if items is None:  # e.g. empty input
-                return []
-            return [items]  # wrap a single item into a list
-        return items  # items should already be List[DSLCommand]
+            return [items]
+        return items
 
 
 # - main parsing function
@@ -268,13 +287,11 @@ def parse_bndsl(dsl_string: str) -> List[DSLCommand]:
         transformed_commands: List[DSLCommand] = transformer.transform(parse_tree)
 
         if transformed_commands is None:
-            # this case shouldn't happen, but as a safeguard:
             return []
-
+        # the 'start' rule in the transformer should already ensure a list.
+        # if it's a single item not in a list, it's unexpected but we can wrap it.
         if not isinstance(transformed_commands, list):
-            # if the transformer returns a single command instead of a list,
-            # wrap it in a list for consistency
-            transformed_commands = [transformed_commands]
+            return [transformed_commands]
 
         return transformed_commands
     except LarkError as e:
@@ -336,11 +353,29 @@ if __name__ == "__main__":
         # Test for roundtrip serialization 
         COMMENT 0x4000 "Single line comment with quotes"
         COMMENT 0x4010 @"Multiline comment
-        with quotes
+        with quotes \"escaped\"
         and multiple lines"
         VTYPE 0x4000 var1 "Simple type"
         VTYPE 0x4010 var2 @"Complex type
         spanning multiple lines"
+        """
+
+        sample_dsl_patch = """
+        # Test PATCH commands
+        PATCH 0x5000 @"mov eax, 1\\nnop\\nret" // Escaped newline
+        PATCH 0x5010 @"jmp 0x6000" // Single line assembly
+        PATCH 0x5020 @"push ebp
+        mov ebp, esp
+        sub esp, 0x10
+        ; a comment in assembly
+        mov dword [ebp-4], 0xcafebabe
+        leave
+        ret" // Direct newlines
+        PATCH 0x5030 @"call some_func ; call external"
+        PATCH 0x5040 @" // This is an empty patch effectively
+        "
+        PATCH 0x5050 @"mov rbx, qword ptr [rax+0x20]"
+        PATCH 0x5060 "nop" // Using normal string for single instruction
         """
 
         test_cases = [
@@ -348,6 +383,7 @@ if __name__ == "__main__":
             ("Regular strings", sample_dsl_2),
             ("Mixed string types", sample_dsl_3),
             ("Roundtrip", sample_dsl_4),
+            ("Patch Commands", sample_dsl_patch),
         ]
 
         for name, dsl_content in test_cases:
@@ -361,6 +397,7 @@ if __name__ == "__main__":
                     print("\nparsed commands:")
                     for cmd_idx, cmd in enumerate(parsed_commands):
                         print(f"  {cmd_idx + 1}: {cmd}")
+                        print(f"     to_dsl_string(): {cmd.to_dsl_string()}")
                 else:
                     print(
                         "\nno commands parsed (input might be empty or comments only)."

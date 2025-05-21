@@ -16,6 +16,7 @@ from ..listing import (
     CodeDisplayType,
     LinearListingLine,
 )
+from ..util import get_current_function
 
 
 # - enum for context listing code type
@@ -110,7 +111,7 @@ TASK:
      COMMENT <addr> @"any text, may span lines; the @ means it can be multiline"
      FNAME   <func_addr> <new_function_name>
      VNAME   <func_addr> <old_var_root> <new_var_root>
-     DNAME   <old_global_name> <new_global_name>
+     DNAME   <old_data_name> <new_data_name>
      VTYPE   <func_addr> <var_identifier> "type_string"
 
    **BN-DSL EXPECTATIONS**
@@ -450,52 +451,23 @@ class GatherAnalysisContextTask(BackgroundTask):
         start_addr: Optional[int] = self.params.initial_func_addr
 
         if start_addr is None:
-            if hasattr(self.bv, "offset") and self.bv.offset is not None:  # type: ignore [attr-defined]
-                start_addr = self.bv.offset  # type: ignore [attr-defined]
-                self.log.log_debug(
-                    f"using bv.offset 0x{start_addr:x} as starting address."
-                )
-            else:
-                current_func_from_view = self.bv.current_function
-                if current_func_from_view:
-                    start_addr = current_func_from_view.start
-                    self.log.log_debug(
-                        f"using bv.current_function '{current_func_from_view.name}' (0x{start_addr:x}) as starting point."
-                    )
-                else:
-                    self.log.log_error(
-                        "could not determine a starting address: initial_func_addr was not provided, and bv.offset and bv.current_function are unavailable."
-                    )
-                    return None
+            start_addr = self.bv.offset
 
-        if start_addr is None:
+        initial_func = get_current_function(
+            bv=self.bv,
+            addr=start_addr,
+            log=self.log,
+        )
+        if not initial_func:
             self.log.log_error(
-                "failed to determine a valid starting address after all checks."
+                f"no functions found at address: 0x{start_addr:x}, unable to determine entry function."
             )
             return None
 
-        initial_funcs: List[Function] = self.bv.get_functions_containing(
-            addr=start_addr
-        )
-        if not initial_funcs:
-            func_at_start = self.bv.get_function_at(start_addr)
-            if func_at_start:
-                initial_funcs = [func_at_start]
-            else:
-                self.log.log_error(
-                    f"no function found containing or starting at address {hex(start_addr)}."
-                )
-                return None
-
-        if len(initial_funcs) > 1:
-            self.log.log_warn(
-                f"multiple functions found at/containing {hex(start_addr)} ({len(initial_funcs)} functions). using the first one: {initial_funcs[0].name}."
-            )
-
         self.log.log_info(
-            f"determined entry function: {initial_funcs[0].name} at {hex(initial_funcs[0].start)}"
+            f"determined entry function: {initial_func.name} at {hex(initial_func.start)}"
         )
-        return initial_funcs[0]
+        return initial_func
 
     def _build_llm_instructions_prompt(self) -> str:
         instruction_lines = []

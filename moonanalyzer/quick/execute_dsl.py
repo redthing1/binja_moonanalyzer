@@ -31,6 +31,7 @@ from ..dsl import (
     VNameCommand,
     DNameCommand,
     VTypeCommand,
+    PatchCommand,
     parse_bndsl,
 )
 
@@ -65,6 +66,7 @@ class DSLExecutor:
             VNameCommand: self._execute_vname_command,
             DNameCommand: self._execute_dname_command,
             VTypeCommand: self._execute_vtype_command,
+            PatchCommand: self._execute_patch_command,
         }
 
     # - utility helper methods
@@ -288,6 +290,9 @@ class DSLExecutor:
                 f"  vname: no local variables found with root name '{command.old_var_root}' in function '{target_func.name}'."
             )
 
+        if renamed_variables_count > 0:
+            target_func.reanalyze()
+
     def _execute_dname_command(self, command: DNameCommand):
         """handles the DNAME dsl command for naming or renaming global data entities."""
         self.log.log_info(
@@ -508,6 +513,82 @@ class DSLExecutor:
                 f"cannot set type to '{command.type_string}'. "
                 f"it might have been renamed, or does not exist."
             )
+
+        if variable_found_and_typed:
+            target_func.reanalyze()
+
+    def _execute_patch_command(self, command: PatchCommand):
+        """handles the PATCH dsl command for applying assembly code patches."""
+        self.log.log_info(
+            f"patch: attempting to apply patch at 0x{command.address:x} with assembly:\n{command.assembly_code[:100]}{'...' if len(command.assembly_code) > 100 else ''}"
+        )
+
+        if self.bv.arch is None:
+            self.log.log_error(
+                f"patch: cannot assemble, BinaryView architecture is not set. Command for 0x{command.address:x} skipped."
+            )
+            raise RuntimeError("BinaryView architecture not set for PATCH command")
+
+        if not command.assembly_code.strip():
+            self.log.log_warn(
+                f"patch: assembly code is empty for address 0x{command.address:x}. No patch applied."
+            )
+            # this is a no-op, considered successful for journaling.
+            return
+
+        try:
+            # assemble the code
+            assembled_bytes: bytes = self.bv.arch.assemble(
+                command.assembly_code, command.address
+            )
+            if not assembled_bytes:
+                self.log.log_warn(
+                    f"patch: assembly resulted in zero bytes for address 0x{command.address:x}. "
+                    f'input assembly: "{command.assembly_code.strip()}". no patch written.'
+                )
+                # considered a successful no-op if assembly itself didn't error.
+                return
+
+            self.log.log_debug(
+                f"patch: successfully assembled {len(assembled_bytes)} byte(s) for 0x{command.address:x}: {assembled_bytes.hex()}"
+            )
+
+            # write the assembled bytes to the BinaryView
+            bytes_written = self.bv.write(command.address, assembled_bytes)
+            if bytes_written != len(assembled_bytes):
+                self.log.log_error(
+                    f"patch: failed to write all assembled bytes at 0x{command.address:x}. "
+                    f"expected to write {len(assembled_bytes)}, but wrote {bytes_written}."
+                )
+                raise RuntimeError(
+                    f"partial write ({bytes_written}/{len(assembled_bytes)}) during patch application at 0x{command.address:x}"
+                )
+
+            self.log.log_info(
+                f"patch: successfully applied {bytes_written} byte patch at 0x{command.address:x}."
+            )
+            # tell bn that data has changed so analysis can update if needed
+            self.bv.notify_data_written(command.address, bytes_written)
+            # request an analysis update for the function containing the patch
+            func_context = self._get_function_context(command.address)
+            if func_context:
+                func_context.reanalyze()
+
+        except ValueError as ve:
+            self.log.log_error(
+                f"patch: assembly error at 0x{command.address:x} - {ve}\nAssembly attempted:\n{command.assembly_code}"
+            )
+            raise
+        except NotImplementedError:
+            self.log.log_error(
+                f"patch: architecture '{self.bv.arch.name}' does not support assembly. Command for 0x{command.address:x} failed."
+            )
+            raise
+        except Exception as e:
+            self.log.log_error(
+                f"patch: unexpected error applying patch at 0x{command.address:x}: {e}\n{traceback.format_exc()}"
+            )
+            raise
 
     # - main public execution method for a list of commands
     def execute_script_commands(

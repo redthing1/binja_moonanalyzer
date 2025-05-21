@@ -1,19 +1,23 @@
+from typing import Optional
+
 import binaryninja
 from binaryninja import (
     BinaryView,
     PluginCommand,
+    Function,
     interaction,
 )
 
 from ..defs import LOGGER_NAME
 from ..settings import my_settings
-
+from ..util import get_current_function
 from .gather_context import (
     GatherAnalysisContextTask,
     AnalysisParameters,
     ContextCodeType,
 )
 from .execute_dsl import ExecuteBNDSLTask
+from .smart_patch import SmartPatchContextTask
 
 
 # - ui interaction helper
@@ -107,15 +111,15 @@ def menu_custom_analysis_begin(bv: BinaryView):
     )
 
     project_context_field = interaction.MultilineTextField(
-        "Project Context (Optional):",
+        "Project Context:",
         default=default_project_context,
     )
     custom_prompt_field = interaction.MultilineTextField(
-        "Focus Instructions (Optional):",
+        "Focus Instructions:",
         default=default_custom_prompt_additions,
     )
     detail_level_field = interaction.MultilineTextField(
-        f"Level of Detail (Optional):",
+        f"Level of Detail:",
         default=default_level_of_detail_instructions,
     )
     code_type_choices = [str(ct) for ct in ContextCodeType]
@@ -251,6 +255,60 @@ def menu_gather_listing_context(bv: BinaryView):
         binaryninja.interaction.get_form_input([context_text_field], prompt_title)
 
 
+def menu_smart_patch_begin(bv: BinaryView):
+    log = bv.create_logger(LOGGER_NAME)
+    log.log_info("smart patch command triggered.")
+
+    current_function: Optional[Function] = get_current_function(
+        bv=bv, addr=None, log=log
+    )
+    if not current_function:
+        interaction.show_message_box(
+            "Smart Patch Error",
+            "no current function selected. please navigate to a function.",
+            icon=binaryninja.interaction.MessageBoxIcon.ErrorIcon,
+        )
+        log.log_error("smart patch attempted without a current function.")
+        return
+
+    patch_objective_text_field = interaction.MultilineTextField(
+        "Objective:"
+    )
+
+    if interaction.get_form_input(
+        [patch_objective_text_field], "Smart Patch Objective"
+    ):
+        patch_objective = patch_objective_text_field.result.strip()
+        if not patch_objective:
+            interaction.show_message_box(
+                "Smart Patch Error",
+                "Objective cannot be empty.",
+                icon=binaryninja.interaction.MessageBoxIcon.ErrorIcon,
+            )
+            log.log_warn("user provided an empty patch objective.")
+            return
+
+        log_objective = patch_objective[:100].replace("\n", " ") + (
+            "..." if len(patch_objective) > 100 else ""
+        )
+        log.log_info(
+            f"user entered patch objective for function '{current_function.name}': {log_objective}"
+        )
+
+        patch_context_task = SmartPatchContextTask(
+            bv, current_function, patch_objective
+        )
+        patch_context_task.run()
+
+        _show_analysis_result_dialog(
+            bv,
+            patch_context_task,
+            "Smart Patch",
+        )
+    else:
+        log.log_info("user cancelled smart patch objective input.")
+
+
 PluginCommand.register(
     "MoonAnalyzer\\Analysis Context (Quick)",
     "Gather context for the current function and its callees using default setting",
@@ -273,4 +331,10 @@ PluginCommand.register(
     "MoonAnalyzer\\Listing Context",
     "Gather context for the current function and its callees using custom settings",
     menu_gather_listing_context,
+)
+
+PluginCommand.register(
+    "MoonAnalyzer\\Smart Patch",
+    "Generate an prompt to suggest patches for the current function",
+    menu_smart_patch_begin,
 )
