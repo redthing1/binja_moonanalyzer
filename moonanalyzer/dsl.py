@@ -56,10 +56,13 @@ class CommentCommand:
     command_type: str = "COMMENT"
 
     def to_dsl_string(self) -> str:
-        # escape backslashes first, then double quotes, to correctly form the @"" string
-        processed_text = self.text.replace("\\", "\\\\")
-        processed_text = processed_text.replace('"', '\\"')
-        return f'COMMENT 0x{self.address:x} @"{processed_text}"'
+        # decide whether to use normal or multiline string based on content
+        if "\n" in self.text:
+            # multiline string: use @"..." format
+            return f'COMMENT 0x{self.address:x} @"{self.text}"'
+        else:
+            # normal string: use regular quotes
+            return f'COMMENT 0x{self.address:x} "{self.text}"'
 
 
 @dataclasses.dataclass
@@ -107,8 +110,25 @@ class DNameCommand:
         return f"DNAME {self.old_global_name} {self.new_global_name}"
 
 
+@dataclasses.dataclass
+class VTypeCommand:
+    """
+    represents a VTYPE (local variable type) command in the dsl.
+    """
+
+    function_address: int
+    var_identifier: str
+    type_string: str
+    command_type: str = "VTYPE"
+
+    def to_dsl_string(self) -> str:
+        return f'VTYPE 0x{self.function_address:x} {self.var_identifier} "{self.type_string}"'
+
+
 # union type for type hinting a list of any command
-DSLCommand = Union[CommentCommand, FNameCommand, VNameCommand, DNameCommand]
+DSLCommand = Union[
+    CommentCommand, FNameCommand, VNameCommand, DNameCommand, VTypeCommand
+]
 
 
 # - Lark grammar definition
@@ -119,15 +139,18 @@ _BNDSL_LARK_GRAMMAR = r"""
            | fname_stmt
            | vname_stmt
            | dname_stmt
+           | vtype_stmt
 
-    comment_stmt : "COMMENT"i HEX_ADDRESS AT_STRING
+    comment_stmt : "COMMENT"i HEX_ADDRESS (AT_STRING | NORMAL_STRING)
     fname_stmt   : "FNAME"i HEX_ADDRESS IDENTIFIER
     vname_stmt   : "VNAME"i HEX_ADDRESS IDENTIFIER IDENTIFIER
     dname_stmt   : "DNAME"i IDENTIFIER IDENTIFIER
+    vtype_stmt   : "VTYPE"i HEX_ADDRESS IDENTIFIER (AT_STRING | NORMAL_STRING)
 
     HEX_ADDRESS: /0x[0-9a-fA-F]+/
     IDENTIFIER: /[a-zA-Z_][a-zA-Z0-9_]*/
-    AT_STRING : /@"(?:\\.|[^"\\]|\n)*"/
+    AT_STRING : /@"[^"]*"/
+    NORMAL_STRING : /"[^"\n]*"/
 
     %import common.WS
     %ignore WS
@@ -154,6 +177,10 @@ class DSLToDataclasses(Transformer):  # Renamed from DslToDataclasses
         # strip leading @" and trailing " from the captured string
         return token.value[2:-1]
 
+    def NORMAL_STRING(self, token: Token) -> str:
+        # strip leading " and trailing " from the captured string
+        return token.value[1:-1]
+
     @v_args(inline=True)
     def comment_stmt(self, address: int, text: str) -> CommentCommand:
         return CommentCommand(address=address, text=text)
@@ -176,6 +203,16 @@ class DSLToDataclasses(Transformer):  # Renamed from DslToDataclasses
     def dname_stmt(self, old_global_name: str, new_global_name: str) -> DNameCommand:
         return DNameCommand(
             old_global_name=old_global_name, new_global_name=new_global_name
+        )
+
+    @v_args(inline=True)
+    def vtype_stmt(
+        self, function_address: int, var_identifier: str, type_string: str
+    ) -> VTypeCommand:
+        return VTypeCommand(
+            function_address=function_address,
+            var_identifier=var_identifier,
+            type_string=type_string,
         )
 
     @v_args(inline=True)
@@ -244,35 +281,93 @@ def parse_bndsl(dsl_string: str) -> List[DSLCommand]:
         raise e
 
 
-# - example usage (when run as a script)
 if __name__ == "__main__":
-    print("BN-DSL Parser Module - Example Usage (with DNAME)")
-    print("----------------------------------------------")
+    print("bn-dsl parser module - example usage with various string formats")
+    print("-------------------------------------------------")
 
     if Lark is None:
-        print("Cannot run example: Lark library is not installed (pip install lark).")
+        print("cannot run example: lark library is not installed (pip install lark).")
     else:
-        example_dsl_with_dname = """
-        FNAME   0x006ebf00 check_and_load_license
-        COMMENT 0x006ebf00 @"Entry: verify or load license blob."
-        VNAME   0x006ebf00 user_buf license_env_buffer
-        DNAME   g_license_status_flag g_is_license_valid
+        sample_dsl_1 = """
+        # example function and variable modifications with multiline strings
+        FNAME   0x1000 process_input
+        VNAME   0x1000 arg_1 input_buffer
+        VTYPE   0x1000 input_buffer @"char*" // type the renamed local var
+        
+        COMMENT 0x1000 @"entry point for processing user input."
+        
+        VNAME   0x1000 var_24 loop_counter
+        VTYPE   0x1000 loop_counter @"int"     // type another local var
+
+        VTYPE   0x1000 var_30 @"CustomStruct* my_struct_ptr" // type an auto-var with a custom type
         """
+
+        sample_dsl_2 = """
+        # example using regular string literals
+        FNAME   0x2000 handle_request
+        VNAME   0x2000 arg_8 request_buffer
+        VTYPE   0x2000 request_buffer "char*"  // normal string
+        
+        COMMENT 0x2000 "Main entry point for HTTP requests"  // normal string
+        
+        VNAME   0x2000 var_10 status_code
+        VTYPE   0x2000 status_code "int"
+        """
+
+        sample_dsl_3 = """
+        # example mixing both string types
+        FNAME   0x3000 parse_config
+        
+        # multiline comment with @"..." syntax
+        COMMENT 0x3000 @"This function parses the configuration file.
+        It handles multiple sections and validates entries."
+        
+        # single line comment with "..." syntax
+        COMMENT 0x3010 "Configuration validation routine"
+        
+        VTYPE   0x3000 config_ptr "ConfigStruct*"  // normal string
+        VTYPE   0x3000 complex_type @"struct {
+            int id;
+            char* name;
+        }*"  // multiline type with @"..." syntax
+        """
+
+        sample_dsl_4 = """
+        # Test for roundtrip serialization 
+        COMMENT 0x4000 "Single line comment with quotes"
+        COMMENT 0x4010 @"Multiline comment
+        with quotes
+        and multiple lines"
+        VTYPE 0x4000 var1 "Simple type"
+        VTYPE 0x4010 var2 @"Complex type
+        spanning multiple lines"
+        """
+
         test_cases = [
-            ("DSL with DNAME", example_dsl_with_dname),
+            ("Multiline strings", sample_dsl_1),
+            ("Regular strings", sample_dsl_2),
+            ("Mixed string types", sample_dsl_3),
+            ("Roundtrip", sample_dsl_4),
         ]
+
         for name, dsl_content in test_cases:
-            print(f"\n--- Testing: {name} ---")
-            print("Input DSL:")
-            dsl_snippet = dsl_content.strip()
-            print(f"```\n{dsl_snippet}\n```")
+            print(f"\n--- testing: {name} ---")
+            print("input dsl:")
+            dsl_snippet = dsl_content.strip()  # show a snippet for brevity
+            print(f"```bndsl\n{dsl_snippet}\n```")
             try:
                 parsed_commands = parse_bndsl(dsl_content)
-                print("\nParsed Commands:")
-                for cmd_idx, cmd in enumerate(parsed_commands):
-                    print(f"  {cmd_idx}: {cmd}")
+                if parsed_commands:
+                    print("\nparsed commands:")
+                    for cmd_idx, cmd in enumerate(parsed_commands):
+                        print(f"  {cmd_idx + 1}: {cmd}")
+                else:
+                    print(
+                        "\nno commands parsed (input might be empty or comments only)."
+                    )
             except LarkError as e:
-                print(f"\nError parsing DSL: {e}")
-            except Exception as e:
-                print(f"\nAn unexpected error occurred: {e}")
-        print("\n--- End of Examples ---")
+                print(f"\nerror parsing dsl: {e}")
+            except Exception as e:  # catch any other unexpected errors
+                print(f"\nan unexpected error occurred during parsing: {e}")
+
+        print("\n--- end of examples ---")
