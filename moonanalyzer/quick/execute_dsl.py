@@ -5,9 +5,13 @@ from typing import (
     Dict,
     Any,
     Tuple,
+    Type,
+    Union,
 )
 import traceback
 import re
+import json
+import dataclasses
 
 import binaryninja
 from binaryninja import (
@@ -37,6 +41,53 @@ from ..dsl import (
 )
 
 
+# - helper functions for dataclass serialization
+def serialize_command(command: DSLCommand) -> Dict[str, Any]:
+    """
+    converts a dsl command dataclass to a dictionary for storage.
+    preserves the command type information for accurate deserialization.
+    """
+    # convert dataclass to dict
+    command_dict = dataclasses.asdict(command)
+    # store class name for reconstruction
+    command_dict["command_class"] = command.__class__.__name__
+    return command_dict
+
+
+def deserialize_command(command_dict: Dict[str, Any]) -> Optional[DSLCommand]:
+    """
+    recreates a dsl command object from a dictionary representation.
+    """
+    command_class_name = command_dict.pop("command_class", None)
+    if not command_class_name:
+        return None
+
+    # map command class names to actual classes
+    command_classes = {
+        "CommentCommand": CommentCommand,
+        "FNameCommand": FNameCommand,
+        "VNameCommand": VNameCommand,
+        "DNameCommand": DNameCommand,
+        "VTypeCommand": VTypeCommand,
+        "PatchCommand": PatchCommand,
+    }
+
+    # get the appropriate class
+    command_class = command_classes.get(command_class_name)
+    if not command_class:
+        return None
+
+    # remove command_type from dict if present (it's a default in the dataclass)
+    if "command_type" in command_dict:
+        command_dict.pop("command_type")
+
+    try:
+        # instantiate the command class with the dict data
+        return command_class(**command_dict)
+    except Exception:
+        return None
+
+
 # - dsl execution logic
 class DSLExecutor:
     """
@@ -46,11 +97,9 @@ class DSLExecutor:
     and is not directly tied to ui components or background task management.
     """
 
-    # - metadata keys for bndsl operation journaling
-    # key for storing the total count of journaled bndsl operations.
-    OP_COUNT_KEY = "moonanalyzer.bndsl_op_count"
-    # prefix for keys storing individual journaled bndsl operation strings.
-    OP_DATA_PREFIX = "moonanalyzer.bndsl_op_data_"
+    # - metadata key for bndsl operation journaling
+    # key for storing all journaled operations as a single JSON string
+    BNDSL_JOURNAL_KEY = "moonanalyzer.bndsl_journal"
     # tag type for patches
     TAG_TYPE_PATCH = "Patch"
 
@@ -126,83 +175,103 @@ class DSLExecutor:
         return None
 
     # - journaling implementation methods
-    def _get_initial_journal_count(self) -> int:
+    def _get_journal(self) -> List[Dict[str, Any]]:
         """
-        retrieves the current total count of previously journaled bndsl operations
-        from the binaryview's metadata.
-        returns 0 if the count is not found or if an error occurs.
+        retrieves the current journal from the binaryview's metadata.
+
+        returns:
+            a list of dictionaries, each representing a journaled command
         """
-        current_op_journal_count = 0
         try:
-            # query_metadata can return various types or none if the key doesn't exist.
-            queried_count = self.bv.query_metadata(self.OP_COUNT_KEY)
-            if isinstance(queried_count, int):
-                current_op_journal_count = queried_count
-            elif queried_count is not None:
-                # handle case where the key exists but stores an unexpected data type.
-                self.log.log_warn(
-                    f"journaling: metadata key '{self.OP_COUNT_KEY}' found but is not an integer (type: {type(queried_count)}). resetting journal count to 0."
-                )
+            journal_json = self.bv.query_metadata(self.BNDSL_JOURNAL_KEY)
+            if not journal_json:
+                self.log.log_debug("journaling: no existing journal found.")
+                return []
+
+            return json.loads(journal_json)
         except Exception as e:
-            # catch any other exceptions during metadata query.
-            self.log.log_error(
-                f"journaling: error querying metadata key '{self.OP_COUNT_KEY}': {e}. defaulting journal count to 0."
-            )
-        return current_op_journal_count
+            self.log.log_error(f"journaling: failed to retrieve journal: {e}")
+            return []
 
-    def _journal_single_op(
-        self,
-        command_obj: DSLCommand,
-        base_journal_count: int,
-        successful_ops_idx_this_run: int,
-    ):
+    def _journal_operations(self, successful_commands: List[DSLCommand]):
         """
-        journals a single successfully executed dsl command to the binaryview's metadata.
-        `base_journal_count` is the total count before this execution run.
-        `successful_ops_idx_this_run` is the 0-based index of this successful operation within the current run.
+        journals all successful dsl commands as a single JSON object in the binaryview's metadata.
+
+        args:
+            successful_commands: a list of successfully executed dslcommand objects
         """
+        if not successful_commands:
+            self.log.log_debug("journaling: no operations to journal.")
+            return
+
         try:
-            # command objects must implement to_dsl_string() to be journalable.
-            if not hasattr(command_obj, "to_dsl_string"):
-                self.log.log_error(
-                    f"journaling: command object of type {type(command_obj)} lacks 'to_dsl_string' method. cannot journal."
-                )
-                return
+            # get existing journal if any
+            existing_journal = self._get_journal()
 
-            command_dsl_str = command_obj.to_dsl_string()
-            # calculate the global, persistent index for this journal entry.
-            journal_total_index = base_journal_count + successful_ops_idx_this_run
-            metadata_key_for_op = f"{self.OP_DATA_PREFIX}{journal_total_index}"
+            # process new commands to journal
+            new_entries = []
+            for cmd in successful_commands:
+                try:
+                    # serialize the command to a dict
+                    cmd_dict = serialize_command(cmd)
+                    # store the dsl string for easy access
+                    if hasattr(cmd, "to_dsl_string"):
+                        cmd_dict["dsl_string"] = cmd.to_dsl_string()
+                    else:
+                        self.log.log_warn(
+                            f"journaling: command object of type {type(cmd)} lacks 'to_dsl_string' method."
+                        )
+                    new_entries.append(cmd_dict)
+                except Exception as e:
+                    self.log.log_error(
+                        f"journaling: failed to serialize command {cmd}: {e}"
+                    )
 
-            self.bv.store_metadata(metadata_key_for_op, command_dsl_str)
-            self.log.log_debug(
-                f"journaling: stored operation to metadata key '{metadata_key_for_op}': {command_dsl_str}"
-            )
-        except Exception as journal_e:
-            # log journaling errors but do not let them halt the entire process
-            # if the command itself executed successfully.
-            self.log.log_error(
-                f"journaling: failed to journal command {command_obj}: {journal_e}"
-            )
-            self.log.log_error(
-                traceback.format_exc()
-            )  # include full traceback for debugging
+            # combine existing journal with new entries
+            journal_entries = existing_journal + new_entries
 
-    def _update_total_journal_count(self, final_total_count: int):
-        """
-        updates the master journal count (OP_COUNT_KEY) in the binaryview's metadata
-        to reflect the new total number of journaled operations.
-        """
-        try:
-            self.bv.store_metadata(self.OP_COUNT_KEY, final_total_count)
+            # convert to json and store
+            journal_json = json.dumps(journal_entries)
+            self.bv.store_metadata(self.BNDSL_JOURNAL_KEY, journal_json)
+
             self.log.log_info(
-                f"journaling: updated total bndsl operation journal count in metadata to: {final_total_count}."
+                f"journaling: successfully journaled {len(new_entries)} new operations "
+                f"(total journal now contains {len(journal_entries)} operations)."
             )
         except Exception as e:
-            self.log.log_error(
-                f"journaling: failed to update metadata key '{self.OP_COUNT_KEY}' to {final_total_count}: {e}"
-            )
+            self.log.log_error(f"journaling: failed to journal operations: {e}")
             self.log.log_error(traceback.format_exc())
+
+    def get_journaled_commands(self) -> List[DSLCommand]:
+        """
+        reconstructs and returns all journaled commands as DSLCommand objects.
+
+        returns:
+            a list of DSLCommand objects
+        """
+        journal = self._get_journal()
+        commands = []
+
+        for entry in journal:
+            cmd = deserialize_command(entry)
+            if cmd:
+                commands.append(cmd)
+            else:
+                self.log.log_warn(f"Failed to deserialize command: {entry}")
+
+        return commands
+
+    def get_journaled_command_strings(self) -> List[str]:
+        """
+        retrieves all previously journaled dsl command strings from the binaryview's metadata.
+
+        returns:
+            a list of dsl command strings
+        """
+        journal = self._get_journal()
+        return [
+            entry.get("dsl_string", "") for entry in journal if "dsl_string" in entry
+        ]
 
     # - individual dsl command execution handlers
     def _execute_comment_command(self, command: CommentCommand):
@@ -625,26 +694,21 @@ class DSLExecutor:
             self.log.log_info("executor: no commands provided to execute.")
             return 0, 0, []  # successful_ops, failed_ops, error_messages
 
-        initial_journal_count = self._get_initial_journal_count()
-        self.log.log_info(
-            f"executor: starting with initial journal count: {initial_journal_count}."
-        )
+        successful_ops = 0
+        failed_ops = 0
+        error_messages: List[str] = []
 
-        successful_ops_this_run = 0
-        failed_ops_this_run = 0
-        error_messages_for_failed_ops: List[str] = []
+        # collect successful operations for journaling at the end
+        successful_commands: List[DSLCommand] = []
 
         # all commands in this batch are processed within a single undoable transaction.
-        # if any command raises an unhandled exception that propagates out of this 'with' block,
-        # all changes made by preceding commands in this batch would be reverted by binaryninja.
-        # individual command failures handled within the loop do not cause a full revert unless they re-raise.
         with self.bv.undoable_transaction():
             for cmd_idx, command_obj in enumerate(commands):
                 if cancellation_check():
                     # if cancellation is requested, log it and stop processing further commands.
                     cancellation_message = f"executor: cancellation requested. stopping after processing {cmd_idx} of {len(commands)} commands."
                     self.log.log_info(cancellation_message)
-                    error_messages_for_failed_ops.append(
+                    error_messages.append(
                         "execution was cancelled by user request."
                     )  # user-facing message
                     break  # exit the loop over commands
@@ -652,20 +716,20 @@ class DSLExecutor:
                 self.log.log_debug(
                     f"executor: processing command {cmd_idx + 1}/{len(commands)}: {command_obj}"
                 )
-                command_executed_successfully_this_iteration = False
+                command_executed_successfully = False
                 try:
                     # dispatch to the appropriate handler based on the command object's type.
                     handler = self.command_handlers.get(type(command_obj))
                     if handler:
                         handler(command_obj)  # execute the specific command logic
-                        command_executed_successfully_this_iteration = (
+                        command_executed_successfully = (
                             True  # assume success if handler doesn't raise
                         )
                     else:
                         # no handler is registered for this type of command.
                         err_msg = f"no handler registered for command type: {type(command_obj).__name__} (command: {command_obj}). this command was skipped."
                         self.log.log_error(err_msg)
-                        error_messages_for_failed_ops.append(err_msg)
+                        error_messages.append(err_msg)
                         # this is considered a failure for this specific command.
                 except Exception as exec_e:
                     # an exception occurred during the execution of the command's handler.
@@ -676,36 +740,27 @@ class DSLExecutor:
                     self.log.log_error(
                         traceback.format_exc()
                     )  # log full traceback for debugging
-                    error_messages_for_failed_ops.append(err_msg)
+                    error_messages.append(err_msg)
                     # command execution failed.
 
-                # - journal the command if its execution was successful.
-                if command_executed_successfully_this_iteration:
-                    # the index for journaling is based on the base count + how many successful ops we've had *so far in this run*.
-                    self._journal_single_op(
-                        command_obj, initial_journal_count, successful_ops_this_run
-                    )
-                    successful_ops_this_run += 1
+                # collect successful operations for journaling at the end
+                if command_executed_successfully:
+                    successful_commands.append(command_obj)
+                    successful_ops += 1
                 else:
-                    failed_ops_this_run += (
+                    failed_ops += (
                         1  # increment failed count if execution failed or no handler
                     )
 
-        # after the loop (all commands processed or cancelled), update the total journal count in metadata.
-        if successful_ops_this_run > 0:
-            self._update_total_journal_count(
-                initial_journal_count + successful_ops_this_run
-            )
+            # journal all successful operations at the end
+            if successful_commands:
+                self._journal_operations(successful_commands)
 
         self.log.log_info(
             f"executor: command execution run finished. "
-            f"successful and journaled: {successful_ops_this_run}, failed or skipped: {failed_ops_this_run}."
+            f"successful and journaled: {successful_ops}, failed or skipped: {failed_ops}."
         )
-        return (
-            successful_ops_this_run,
-            failed_ops_this_run,
-            error_messages_for_failed_ops,
-        )
+        return successful_ops, failed_ops, error_messages
 
 
 # - background task wrapper for dsl execution
@@ -862,19 +917,5 @@ class ExecuteBNDSLTask(BackgroundTask):
         message_box_icon = binaryninja.MessageBoxIcon.InformationIcon  # default to info
         if self.cancelled or num_failed > 0:
             message_box_icon = binaryninja.MessageBoxIcon.WarningIcon
-
-        # # show the summary message box to the user.
-        # # disable message boxes for now cause they're annoying
-        # if (
-        #     num_successful > 0
-        #     or num_failed > 0
-        #     or self.cancelled
-        #     or (not parsed_commands and final_dsl_script_to_parse)
-        # ):  # ensures some feedback if script had content but no commands
-        #     interaction.show_message_box(
-        #         "BN-DSL Execution Summary",
-        #         final_user_summary_message,
-        #         icon=message_box_icon,
-        #     )
 
         self.finish()
