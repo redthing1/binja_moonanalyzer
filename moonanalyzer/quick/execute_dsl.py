@@ -9,7 +9,7 @@ from typing import (
 import traceback
 import re
 
-import binaryninja  # an alias for the main binaryninja module is good practice
+import binaryninja
 from binaryninja import (
     BinaryView,
     Function,
