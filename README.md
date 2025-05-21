@@ -10,6 +10,11 @@ binja: analyze things on the moon
 - the llm sends back a dsl script that can rename things and add comments based on its analysis of the decompilation.
 - it's designed in the way that you can keep adding to a stateful chat in a back-and-forth, gradually analyzing the binary.
 
+## features
+
+- smart analyze: send snippets of HLIL and disassembly and get back DSL that can rename and retype things
+- smart patch: send snippets of HLIL and disassembly along with an objective and get back a patch
+
 ## guide
 
 - ensure python dependency `lark` (for parsing) is installed
