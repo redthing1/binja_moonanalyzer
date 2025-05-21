@@ -23,3 +23,14 @@ def get_current_function(bv: BinaryView, addr: Optional[int], log: Logger):
     selected_func: Function = initial_funcs[0]
 
     return selected_func
+
+
+def get_or_create_tag_type(
+    bv: BinaryView, name: str, icon: str
+) -> Optional[binaryninja.TagType]:
+    t = bv.get_tag_type(name)
+    if t is None:
+        t = bv.create_tag_type(name, icon)
+        if t is None:
+            raise ValueError(f"Failed to create tag type: {name}")
+    return t

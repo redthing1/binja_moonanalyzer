@@ -23,6 +23,7 @@ from binaryninja import (
 )
 
 from ..defs import LOGGER_NAME
+from ..util import get_or_create_tag_type
 
 from ..dsl import (
     DSLCommand,
@@ -50,6 +51,8 @@ class DSLExecutor:
     OP_COUNT_KEY = "moonanalyzer.bndsl_op_count"
     # prefix for keys storing individual journaled bndsl operation strings.
     OP_DATA_PREFIX = "moonanalyzer.bndsl_op_data_"
+    # tag type for patches
+    TAG_TYPE_PATCH = "Patch"
 
     def __init__(self, bv: BinaryView, logger: Logger):
         # the binary view instance on which operations will be performed.
@@ -536,6 +539,8 @@ class DSLExecutor:
             # this is a no-op, considered successful for journaling.
             return
 
+        _ = get_or_create_tag_type(self.bv, self.TAG_TYPE_PATCH, "🩹")
+
         try:
             # assemble the code
             assembled_bytes: bytes = self.bv.arch.assemble(
@@ -567,6 +572,15 @@ class DSLExecutor:
             self.log.log_info(
                 f"patch: successfully applied {bytes_written} byte patch at 0x{command.address:x}."
             )
+
+            # add a tag describing the patch
+            self.bv.add_tag(
+                addr=command.address,
+                tag_type_name=self.TAG_TYPE_PATCH,
+                data=f"PATCH@{command.address:x}:\n{command.assembly_code.strip()}",
+                user=True,
+            )
+
             # tell bn that data has changed so analysis can update if needed
             self.bv.notify_data_written(command.address, bytes_written)
             # request an analysis update for the function containing the patch
