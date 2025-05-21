@@ -3,7 +3,7 @@
     "name": "Moon Analyzer",
     "description": "Analyze things on the Moon",
     "author": "redthing1",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "minimumBinaryNinjaVersion": 3164,
     "type": [
         "core",
