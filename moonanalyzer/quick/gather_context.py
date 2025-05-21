@@ -40,62 +40,81 @@ class AnalysisParameters:
 # - prompt template
 # this template is formatted with llm_instructions, analysis_scope, and the code listing.
 # the llm_instructions section is built dynamically based on user input.
-GATHER_CONTEXT_PROMPT_TEMPLATE = """You are a reverse-engineering assistant.
+GATHER_CONTEXT_PROMPT_TEMPLATE = """You are an expert reverse-engineering assistant with deep knowledge of binary analysis, with a meticulous and thorough approach.
 
 {llm_instructions}
 
-TASK:
-1. For each function in the listing, write an explanation covering:
-   - Overall purpose  
-   - Inputs & outputs  
-   - Control flow highlights (branches, loops)  
-   - Major data operations (buffers, copies)  
-   - Side effects, error paths
+ANALYSIS APPROACH:
+1. First scan all functions to identify patterns, relationships, and overall program flow
+2. Form hypotheses about each function's purpose and how they work together
+3. Analyze individual functions carefully, showing your reasoning step-by-step
+4. Look for security implications, common algorithms, and data structure patterns
+5. Document your findings with clear explanations before generating any commands
 
+TASK:
+1. For each function in the listing, write a detailed explanation covering:
+   - Overall purpose and role in the program
+   - Inputs & outputs (parameters, return values)
+   - Control flow highlights (branches, loops, conditional jumps)
+   - Major data operations (buffers, copies, allocations)
+   - Side effects and error paths
+   - Your reasoning about how you determined the function's purpose
+   
    For longer and more complex functions, first give a high-level overview, then explain each part of the function in more detail.
    When you clearly identify simple standard library functions, name them and their arguments to aid understanding, but skip details.
 
 2. After all explanations, output exactly one fenced bndsl block.
-   In that block, include only these statements, one per line:
+   In that block, include these statements, one per line:
 
      COMMENT <addr> @"any text, may span lines; the @ means it can be multiline"
      FNAME   <func_addr> <new_function_name>
      VNAME   <func_addr> <old_var_root> <new_var_root>
+     DNAME   <old_global_name> <new_global_name>
+     VTYPE   <func_addr> <var_identifier> "type_string"
 
    **BN-DSL EXPECTATIONS**
    - **FNAME:** Try to rename every function whose name is generic (e.g. sub_XXXXX) or unclear.
    - **VNAME:** Try to rename any local or parameter whose root name is non-descriptive (e.g. var_123, buf, ptr) to something meaningful.
+   - **DNAME:** Rename global data variables from auto-generated names (data_XXXXXX) or unclear names to indicate their purpose.
+   - **VTYPE:** Set types for local variables when you can determine them with reasonable confidence.
    - **COMMENT:** Add some comments per interesting function at the *most important* spots, such as:
-     - Function entry (summarize the purpose)  
-     - Key branch or loop heads  
-     - Before/after major memory ops (memcpy, alloc, free)  
-     - On early-exit or error-handling paths  
+     - Function entry (summarize the purpose)
+     - Key branch or loop heads
+     - Before/after major memory ops (memcpy, alloc, free)
+     - On early-exit or error-handling paths
+   
    - Strive for breadth: each function should have at least one FNAME, one VNAME, and one COMMENT where it adds clarity.
    - Rename important variables that are used in functions to help explain their purpose.
    - Acknowledge uncertainty or unclear cases with comments, to make it clear something needs further analysis.
    - Use the exact 0x-addresses from the listing margin.
    - Rename only the *root* of cascaded locals (e.g. rename buf, not buf_1).
    - Use snake_case, verb-style names (≤ 40 chars).
-   - Multi-line comments must use triple quotes.
+   - Multi-line comments must use @" " syntax.
    - Note that COMMENT overwrites existing comments, so you can use it to modify existing comments.
 
 BN-DSL EXAMPLES:
 ```bndsl
 # Function rename + entry comment
 FNAME   0x006ebf00 check_and_load_license
-COMMENT 0x006ebf00 @"Entry: verify or load license blob."
+COMMENT 0x006ebf00 @"Entry: verify or load license blob from environment variable."
 
 # Early-exit comment
 COMMENT 0x006ebf58 @"Early-out if license already validated."
 
 # Memory op comment
-COMMENT 0x006ebf64 @"Copy user_buf into local buffer without length check."
+COMMENT 0x006ebf64 @"Copy user_buf into local buffer without length check - potential buffer overflow."
 
-# Variable rename (propagates to buffers)
+# Variable rename (propagates to related variables)
 VNAME   0x006ebf64 user_buf license_env
+VTYPE   0x006ebf64 license_env "char*"
+VTYPE   0x006ebf7c launch_counter "int32_t"
 
 # Rename a generic flag variable
-VNAME   0x006ed104 var_3d9  license_status_flag
+VNAME   0x006ed104 var_3d9 license_status_flag
+
+# Global data rename
+DNAME   data_00a5b200 g_license_config
+DNAME   g_unknown_state g_connection_state
 ```
 
 FILE METADATA:
