@@ -8,7 +8,11 @@ from binaryninja import (
 from ..defs import LOGGER_NAME
 from ..settings import my_settings
 
-from .gather_context import GatherAnalysisContextTask, AnalysisParameters
+from .gather_context import (
+    GatherAnalysisContextTask,
+    AnalysisParameters,
+    ContextCodeType,
+)
 from .execute_dsl import ExecuteBNDSLTask
 
 
@@ -102,14 +106,6 @@ def menu_custom_analysis_begin(bv: BinaryView):
         "moonanalyzer.level_of_detail_instructions", bv
     )
 
-    depth_field = interaction.IntegerField(
-        "Max Traversal Depth:",
-        default=default_clamped_max_depth,
-    )
-    count_field = interaction.IntegerField(
-        "Max Functions:",
-        default=default_max_func_count,
-    )
     project_context_field = interaction.MultilineTextField(
         "Project Context (Optional):",
         default=default_project_context,
@@ -122,11 +118,27 @@ def menu_custom_analysis_begin(bv: BinaryView):
         f"Level of Detail (Optional):",
         default=default_level_of_detail_instructions,
     )
+    code_type_choices = [str(ct) for ct in ContextCodeType]
+    code_type_field = interaction.ChoiceField(
+        "Code Listing Type:",
+        choices=code_type_choices,
+        # default=str(ContextCodeType.HLIL),
+        default=0,  # bug: binja says str but expects int
+    )
+    depth_field = interaction.IntegerField(
+        "Max Traversal Depth:",
+        default=default_clamped_max_depth,
+    )
+    count_field = interaction.IntegerField(
+        "Max Functions:",
+        default=default_max_func_count,
+    )
 
     form_fields = [
         project_context_field,
         custom_prompt_field,
         detail_level_field,
+        code_type_field,
         depth_field,
         count_field,
     ]
@@ -138,6 +150,7 @@ def menu_custom_analysis_begin(bv: BinaryView):
         user_project_context = project_context_field.result.strip()
         user_custom_prompt = custom_prompt_field.result.strip()
         user_detail_level = detail_level_field.result.strip()
+        user_code_type = ContextCodeType(code_type_choices[code_type_field.result])
 
         params = AnalysisParameters(
             max_depth=user_depth,
@@ -145,6 +158,7 @@ def menu_custom_analysis_begin(bv: BinaryView):
             project_context=user_project_context,
             custom_prompt_additions=user_custom_prompt,
             level_of_detail_instructions=user_detail_level,
+            code_type=user_code_type,
             initial_func_addr=bv.offset,
         )
 
@@ -189,6 +203,14 @@ def menu_gather_listing_context(bv: BinaryView):
     default_max_func_count = max(
         0, my_settings.get_integer("moonanalyzer.quick_analysis_max_function_count", bv)
     )
+
+    code_type_choices = [str(ct) for ct in ContextCodeType]
+    code_type_field = interaction.ChoiceField(
+        "Code Listing Type:",
+        choices=code_type_choices,
+        # default=str(ContextCodeType.HLIL),
+        default=0,  # bug: binja says str but expects int
+    )
     depth_field = interaction.IntegerField(
         "Max Traversal Depth:",
         default=default_max_depth,
@@ -198,16 +220,18 @@ def menu_gather_listing_context(bv: BinaryView):
         default=default_max_func_count,
     )
 
-    form_fields = [depth_field, count_field]
+    form_fields = [code_type_field, depth_field, count_field]
 
     if interaction.get_form_input(form_fields, "Listing Context Parameters"):
         user_depth = max(0, depth_field.result)
         user_count = max(0, count_field.result)
+        user_code_type = ContextCodeType(code_type_choices[code_type_field.result])
 
         params = AnalysisParameters(
             max_depth=user_depth,
             max_function_count=user_count,
             initial_func_addr=bv.offset,
+            code_type=user_code_type,
             listing_only=True,
         )
 
@@ -246,7 +270,7 @@ PluginCommand.register(
 )
 
 PluginCommand.register(
-    "MoonAnalyzer\\Listing Context (HLIL)",
+    "MoonAnalyzer\\Listing Context",
     "Gather context for the current function and its callees using custom settings",
     menu_gather_listing_context,
 )

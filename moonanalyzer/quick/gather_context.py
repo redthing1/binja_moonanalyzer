@@ -3,6 +3,7 @@ import collections
 import traceback
 from dataclasses import dataclass
 from typing import Callable
+from enum import Enum
 
 import binaryninja
 from binaryninja import BinaryView, Function, PluginCommand, BackgroundTask, Settings
@@ -15,6 +16,16 @@ from ..listing import (
     CodeDisplayType,
     LinearListingLine,
 )
+
+
+# - enum for context listing code type
+class ContextCodeType(Enum):
+    HLIL = "HLIL"
+    DISASSEMBLY = "Disassembly"
+    HLIL_AND_DISASSEMBLY = "HLIL + Disassembly"
+
+    def __str__(self):
+        return self.value
 
 
 # - dataclass for analysis parameters
@@ -31,10 +42,40 @@ class AnalysisParameters:
     project_context: str = ""  # project context for the llm
     custom_prompt_additions: str = ""  # additional instructions to the llm
     level_of_detail_instructions: str = ""  # llm focus on detail
+    code_type: ContextCodeType = ContextCodeType.HLIL  # default to hlil
     initial_func_addr: Optional[int] = None
     listing_only: bool = (
         False  # if true, only generate hlil listings without the prompt
     )
+
+
+# - dataclasses for managing function discovery context
+@dataclass(
+    frozen=True
+)  # frozen=True makes instances hashable for sets if needed, and immutable
+class DiscoveredFunctionInfo:
+    """
+    holds a function and the context of its discovery.
+    """
+
+    func: Function
+    reason_type: str  # e.g., "initial", "callee", "xref"
+    source_function: Optional[Function] = (
+        None  # function from which this one was discovered
+    )
+    source_address: Optional[int] = (
+        None  # specific address in source_function (e.g., xref location)
+    )
+
+
+@dataclass
+class QueueEntry:
+    """
+    represents an entry in the bfs queue.
+    """
+
+    discovered_info: DiscoveredFunctionInfo
+    depth: int
 
 
 # - prompt template
@@ -124,7 +165,7 @@ ANALYSIS SCOPE:
 {analysis_scope}
 
 LISTING
-```hlil
+```
 {listing}
 ```
 """
@@ -137,35 +178,6 @@ For complex functions, you should try to rename as much as possible to make the 
 Use comments to explain high level flow and important details, but also to note uncertainties.
 Please be sure to provide explanations of the functions before the BN-DSL block.
 """.strip()
-
-
-# - dataclasses for managing function discovery context
-@dataclass(
-    frozen=True
-)  # frozen=True makes instances hashable for sets if needed, and immutable
-class DiscoveredFunctionInfo:
-    """
-    holds a function and the context of its discovery.
-    """
-
-    func: Function
-    reason_type: str  # e.g., "initial", "callee", "xref"
-    source_function: Optional[Function] = (
-        None  # function from which this one was discovered
-    )
-    source_address: Optional[int] = (
-        None  # specific address in source_function (e.g., xref location)
-    )
-
-
-@dataclass
-class QueueEntry:
-    """
-    represents an entry in the bfs queue.
-    """
-
-    discovered_info: DiscoveredFunctionInfo
-    depth: int
 
 
 # - background task for gathering context
@@ -197,10 +209,6 @@ class GatherAnalysisContextTask(BackgroundTask):
     def _make_function_context_block(
         self, discovered_info: DiscoveredFunctionInfo
     ) -> str:
-        """
-        creates a formatted string block for a single function, including its
-        hlil listing and a header indicating why it was included.
-        """
         func = discovered_info.func
         reason_comment_suffix = ""
         if discovered_info.reason_type == "callee" and discovered_info.source_function:
@@ -211,26 +219,71 @@ class GatherAnalysisContextTask(BackgroundTask):
             and discovered_info.source_address is not None
         ):
             reason_comment_suffix = f"    // (code xref from {discovered_info.source_function.name} @ {hex(discovered_info.source_address)})"
-        # for "initial", no extra comment suffix is added by default.
 
-        func_chunk_header = (
-            f"// Function: {func.name} @ {hex(func.start)}{reason_comment_suffix}\n"
-        )
-        try:
-            hlil_listing = format_code_listing(
-                func=func,
-                display_type=CodeDisplayType.HLIL,
+        listing_parts: List[str] = []
+        error_messages_for_this_block: List[str] = []
+
+        # helper to generate and append a specific listing type, now simpler
+        def _try_append_complete_block(
+            display_type: CodeDisplayType,
+            content_type_indicator: str,
+        ):
+            # construct the specific header for this block
+            block_header = f"// Function ({content_type_indicator}): {func.name} @ {hex(func.start)}{reason_comment_suffix}"
+            current_block_parts: List[str] = [block_header]
+
+            try:
+                code_str = format_code_listing(
+                    func=func,
+                    display_type=display_type,
+                )
+                if code_str:
+                    current_block_parts.append(code_str)
+
+                # if successfully generated, add to the main listing_parts
+                # add a newline separator if this isn't the first block being added
+                if (
+                    listing_parts
+                ):  # check if listing_parts already has content (e.g. previous HLIL block)
+                    listing_parts.append("\n")
+                listing_parts.extend(current_block_parts)
+
+            except Exception as e_gen:
+                # if generation fails, log error and append an error message instead of the block
+                error_msg = f"// Error generating {content_type_indicator.lower()} listing for function: {func.name} @ {hex(func.start)}\n// (Header: {block_header.strip()})\n// Details: {e_gen}\n"
+                self.log.log_error(
+                    f"exception generating {content_type_indicator.lower()} listing for function {func.name} (0x{func.start:x}): {e_gen}\n{traceback.format_exc()}"
+                )
+                error_messages_for_this_block.append(error_msg)
+
+        # determine which listings to generate
+        should_generate_hlil = self.params.code_type in [
+            ContextCodeType.HLIL,
+            ContextCodeType.HLIL_AND_DISASSEMBLY,
+        ]
+        should_generate_disassembly = self.params.code_type in [
+            ContextCodeType.DISASSEMBLY,
+            ContextCodeType.HLIL_AND_DISASSEMBLY,
+        ]
+
+        # generate hlil block if requested
+        if should_generate_hlil:
+            _try_append_complete_block(CodeDisplayType.HLIL, "HLIL")
+
+        # generate disassembly block if requested
+        if should_generate_disassembly:
+            _try_append_complete_block(CodeDisplayType.DISASSEMBLY, "Disassembly")
+
+        # if any errors occurred during attempts to generate blocks, append them at the very end
+        if error_messages_for_this_block:
+            if listing_parts:  # add separator if other content exists
+                listing_parts.append("\n")
+            listing_parts.append(
+                "// encountered errors during listing generation for this function:"
             )
-            return func_chunk_header + hlil_listing
-        except Exception as e:
-            self.log.log_error(
-                f"error generating listing for function {func.name} (0x{func.start:x}): {e}\n{traceback.format_exc()}"
-            )
-            # still include the header even if listing fails
-            return (
-                func_chunk_header
-                + f"// Error generating listing for function: {func.name} @ {hex(func.start)}\n// Details: {e}\n"
-            )
+            listing_parts.extend(error_messages_for_this_block)
+
+        return "\n".join(listing_parts)
 
     def _collect_functions_bfs(
         self, start_function: Function
