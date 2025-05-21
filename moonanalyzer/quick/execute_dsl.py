@@ -30,6 +30,7 @@ from ..dsl import (
     FNameCommand,
     VNameCommand,
     DNameCommand,
+    VTypeCommand,
     parse_bndsl,
 )
 
@@ -63,6 +64,7 @@ class DSLExecutor:
             FNameCommand: self._execute_fname_command,
             VNameCommand: self._execute_vname_command,
             DNameCommand: self._execute_dname_command,
+            VTypeCommand: self._execute_vtype_command,
         }
 
     # - utility helper methods
@@ -270,8 +272,7 @@ class DSLExecutor:
                 new_variable_name = command.new_var_root + suffix
 
                 try:
-                    # assigning to the .name property of a binaryninja.Variable object performs the rename.
-                    var_to_rename.name = new_variable_name
+                    var_to_rename.set_name_async(new_variable_name)
                     self.log.log_info(
                         f"  vname: renamed local variable '{original_variable_name}' to '{new_variable_name}' in function '{target_func.name}'."
                     )
@@ -434,6 +435,78 @@ class DSLExecutor:
             self.log.log_error(
                 f"dname: error renaming existing data symbol '{target_data_symbol.name}' "
                 f"at 0x{target_address:x} to '{command.new_global_name}': {e}\n{traceback.format_exc()}"
+            )
+
+    def _execute_vtype_command(self, command: VTypeCommand):
+        """handles the VTYPE dsl command for setting local variable types."""
+        self.log.log_info(
+            f"vtype: setting type for '{command.var_identifier}' in func 0x{command.function_address:x} to '{command.type_string}'."
+        )
+
+        target_func = self._get_function_context(command.function_address)
+        if not target_func:
+            self.log.log_warn(
+                f"vtype: no function context for 0x{command.function_address:x}. "
+                f"cannot type '{command.var_identifier}'. skipped."
+            )
+            return
+
+        # attempt to parse the type string
+        parsed_type_obj: Optional[binaryninja.Type] = None
+        # name_from_string is usually not directly used for var.type assignment,
+        # as the variable already has a name (command.var_identifier).
+        # however, parse_type_string returns it, so we capture it.
+        type_name_from_string: Optional[binaryninja.QualifiedName] = None
+        try:
+            parsed_type_obj, type_name_from_string = self.bv.parse_type_string(
+                command.type_string
+            )
+            if parsed_type_obj is None:
+                self.log.log_error(
+                    f"vtype: failed to parse type string '{command.type_string}' for '{target_func.name}'. "
+                    f"parsed_type_obj is None. command skipped."
+                )
+                return
+            self.log.log_debug(
+                f"vtype: parsed '{command.type_string}' to Type: {parsed_type_obj} (width: {parsed_type_obj.width if parsed_type_obj else 'N/A'}). "
+                f"Name from string (if any): {type_name_from_string}."
+            )
+
+        except Exception as e:
+            self.log.log_error(
+                f"vtype: exception parsing type string '{command.type_string}' for '{target_func.name}': {e}\n{traceback.format_exc()}"
+            )
+            return
+
+        variable_found_and_typed = False
+        # iterate through variables in the function (parameters and local vars)
+        for var_to_type in target_func.vars:  # var_to_type is a binaryninja.Variable
+            # command.var_identifier should match the current name of the variable
+            if var_to_type.name == command.var_identifier:
+                original_var_type_str = (
+                    str(var_to_type.type) if var_to_type.type else "None"
+                )
+                try:
+                    # set the variable's type using the parsed Type object
+                    var_to_type.set_type_async(parsed_type_obj)
+                    self.log.log_info(
+                        f"  vtype: successfully set type of '{var_to_type.name}' "
+                        f"(was: {original_var_type_str}) to '{str(parsed_type_obj)}' (from: '{command.type_string}') in '{target_func.name}'."
+                    )
+                    variable_found_and_typed = True
+                    break  # assume var_identifier is unique enough for this function
+                except Exception as e:
+                    self.log.log_error(
+                        f"  vtype: failed to set type for '{var_to_type.name}' "
+                        f"in '{target_func.name}' to '{command.type_string}': {e}\n{traceback.format_exc()}"
+                    )
+                    # an error here means this specific variable could not be typed.
+
+        if not variable_found_and_typed:
+            self.log.log_warn(
+                f"  vtype: variable '{command.var_identifier}' not found in '{target_func.name}'. "
+                f"cannot set type to '{command.type_string}'. "
+                f"it might have been renamed, or does not exist."
             )
 
     # - main public execution method for a list of commands
