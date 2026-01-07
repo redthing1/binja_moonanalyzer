@@ -72,3 +72,16 @@ my_settings.register_setting(
         }
     ),
 )
+
+# int: custom analysis max hlil lines
+my_settings.register_setting(
+    "moonanalyzer.analysis_max_function_lines",
+    json.dumps(
+        {
+            "title": "Analysis Max Function Lines (HLIL)",
+            "description": "Maximum HLIL lines per function before truncation (0 = unlimited).",
+            "default": 0,
+            "type": "number",
+        }
+    ),
+)

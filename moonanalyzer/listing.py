@@ -231,6 +231,7 @@ def format_code_listing(
     func: Function,
     display_type: CodeDisplayType,
     hex_address_width: Optional[int] = None,
+    max_lines: Optional[int] = None,
 ) -> str:
     """
     generates a single multi-line string representing the formatted code listing
@@ -264,5 +265,17 @@ def format_code_listing(
         # this message indicates that get_function_code_lines yielded nothing,
         # or an error prevented line generation.
         return f"-- no {display_type.name} lines available for {func.name} (or an error occurred during generation) --"
+
+    if max_lines is not None and max_lines > 0 and len(formatted_lines_list) > max_lines:
+        head_count = max_lines // 2
+        tail_count = max_lines - head_count
+        omitted_lines = len(formatted_lines_list) - max_lines
+        omission_line = f"// ... omitting {omitted_lines} lines ..."
+        truncated_lines = (
+            formatted_lines_list[:head_count]
+            + [omission_line]
+            + formatted_lines_list[-tail_count:]
+        )
+        return "\n".join(truncated_lines)
 
     return "\n".join(formatted_lines_list)

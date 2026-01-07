@@ -44,6 +44,7 @@ class AnalysisParameters:
     custom_prompt_additions: str = ""  # additional instructions to the llm
     level_of_detail_instructions: str = ""  # llm focus on detail
     code_type: ContextCodeType = ContextCodeType.HLIL  # default to hlil
+    max_function_lines: int = 0
     initial_func_addr: Optional[int] = None
     listing_only: bool = (
         False  # if true, only generate hlil listings without the prompt
@@ -200,6 +201,7 @@ class GatherAnalysisContextTask(BackgroundTask):
             f"context gathering task initialized with settings: "
             f"max_depth={self.params.max_depth}, "
             f"max_function_count={self.params.max_function_count if self.params.max_function_count > 0 else 'unlimited'}, "
+            f"max_function_lines={self.params.max_function_lines if self.params.max_function_lines > 0 else 'unlimited'}, "
             f"initial_addr={hex(self.params.initial_func_addr) if self.params.initial_func_addr is not None else 'current_offset'}, "
             f"project_context='{self.params.project_context[:50].replace(chr(10), ' ')}...', "
             f"custom_prompt_additions='{self.params.custom_prompt_additions[:50].replace(chr(10), ' ')}...', "
@@ -234,9 +236,13 @@ class GatherAnalysisContextTask(BackgroundTask):
             current_block_parts: List[str] = [block_header]
 
             try:
+                max_lines = None
+                if display_type == CodeDisplayType.HLIL:
+                    max_lines = self.params.max_function_lines
                 code_str = format_code_listing(
                     func=func,
                     display_type=display_type,
+                    max_lines=max_lines,
                 )
                 if code_str:
                     current_block_parts.append(code_str)
@@ -489,6 +495,7 @@ class GatherAnalysisContextTask(BackgroundTask):
         scope_lines = [
             f"Max Traversal Depth for Callees/Xrefs: {self.params.max_depth}",
             f"Max Functions Included in Listing: {self.params.max_function_count if self.params.max_function_count > 0 else 'Unlimited'}",
+            f"Max HLIL Lines Per Function: {self.params.max_function_lines if self.params.max_function_lines > 0 else 'Unlimited'}",
         ]
         return "\n".join(scope_lines)
 

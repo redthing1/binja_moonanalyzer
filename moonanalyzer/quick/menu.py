@@ -109,6 +109,9 @@ def menu_custom_analysis_begin(bv: BinaryView):
     default_level_of_detail_instructions = my_settings.get_string(
         "moonanalyzer.level_of_detail_instructions", bv
     )
+    default_max_function_lines = max(
+        0, my_settings.get_integer("moonanalyzer.analysis_max_function_lines", bv)
+    )
 
     project_context_field = interaction.MultilineTextField(
         "Project Context:",
@@ -137,6 +140,10 @@ def menu_custom_analysis_begin(bv: BinaryView):
         "Max Functions:",
         default=default_max_func_count,
     )
+    max_lines_field = interaction.IntegerField(
+        "Max Function Lines:",
+        default=default_max_function_lines,
+    )
 
     form_fields = [
         project_context_field,
@@ -145,6 +152,7 @@ def menu_custom_analysis_begin(bv: BinaryView):
         code_type_field,
         depth_field,
         count_field,
+        max_lines_field,
     ]
 
     if interaction.get_form_input(form_fields, "Custom Analysis Parameters"):
@@ -155,6 +163,7 @@ def menu_custom_analysis_begin(bv: BinaryView):
         user_custom_prompt = custom_prompt_field.result.strip()
         user_detail_level = detail_level_field.result.strip()
         user_code_type = ContextCodeType(code_type_choices[code_type_field.result])
+        user_max_lines = max(0, max_lines_field.result)
 
         params = AnalysisParameters(
             max_depth=user_depth,
@@ -163,6 +172,7 @@ def menu_custom_analysis_begin(bv: BinaryView):
             custom_prompt_additions=user_custom_prompt,
             level_of_detail_instructions=user_detail_level,
             code_type=user_code_type,
+            max_function_lines=user_max_lines,
             initial_func_addr=bv.offset,
         )
 
