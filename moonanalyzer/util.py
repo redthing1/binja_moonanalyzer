@@ -1,36 +1,34 @@
-from typing import List, Optional, Tuple
+from __future__ import annotations
+
+from typing import Optional
 
 import binaryninja
 from binaryninja import BinaryView, Function, Logger
 
 
-def get_current_function(bv: BinaryView, addr: Optional[int], log: Logger):
+def get_current_function(bv: BinaryView, addr: Optional[int], log: Logger) -> Optional[Function]:
     if addr is None:
         addr = bv.offset
 
-    # get functions at current address
-    initial_funcs: List[Function] = bv.get_functions_containing(addr=addr)
-
-    if not initial_funcs:
+    funcs = bv.get_functions_containing(addr=addr)
+    if not funcs:
         log.log_error(f"no functions found at address: 0x{addr:x}")
         return None
 
-    if len(initial_funcs) > 1:
+    if len(funcs) > 1:
         log.log_warn(
             f"multiple functions found at address: 0x{addr:x}, using first one."
         )
 
-    selected_func: Function = initial_funcs[0]
-
-    return selected_func
+    return funcs[0]
 
 
 def get_or_create_tag_type(
     bv: BinaryView, name: str, icon: str
-) -> Optional[binaryninja.TagType]:
-    t = bv.get_tag_type(name)
-    if t is None:
-        t = bv.create_tag_type(name, icon)
-        if t is None:
+) -> binaryninja.TagType:
+    tag_type = bv.get_tag_type(name)
+    if tag_type is None:
+        tag_type = bv.create_tag_type(name, icon)
+        if tag_type is None:
             raise ValueError(f"Failed to create tag type: {name}")
-    return t
+    return tag_type

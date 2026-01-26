@@ -1,12 +1,13 @@
+from __future__ import annotations
+
 import json
 
 from binaryninja.settings import Settings
 
-my_settings = Settings()
-my_settings.register_group("moonanalyzer", "MoonAnalyzer")
+settings = Settings()
+settings.register_group("moonanalyzer", "MoonAnalyzer")
 
-# int: quick analysis context depth
-my_settings.register_setting(
+settings.register_setting(
     "moonanalyzer.quick_analysis_context_depth",
     json.dumps(
         {
@@ -18,8 +19,7 @@ my_settings.register_setting(
     ),
 )
 
-# bool: quick analysis max function count
-my_settings.register_setting(
+settings.register_setting(
     "moonanalyzer.quick_analysis_max_function_count",
     json.dumps(
         {
@@ -31,8 +31,7 @@ my_settings.register_setting(
     ),
 )
 
-# string: custom analysis project context
-my_settings.register_setting(
+settings.register_setting(
     "moonanalyzer.analysis_project_context",
     json.dumps(
         {
@@ -45,8 +44,7 @@ my_settings.register_setting(
     ),
 )
 
-# string: custom prompt additions
-my_settings.register_setting(
+settings.register_setting(
     "moonanalyzer.custom_prompt_additions",
     json.dumps(
         {
@@ -59,8 +57,7 @@ my_settings.register_setting(
     ),
 )
 
-# string: level of detail instructions
-my_settings.register_setting(
+settings.register_setting(
     "moonanalyzer.level_of_detail_instructions",
     json.dumps(
         {
@@ -73,8 +70,7 @@ my_settings.register_setting(
     ),
 )
 
-# int: custom analysis max hlil lines
-my_settings.register_setting(
+settings.register_setting(
     "moonanalyzer.analysis_max_function_lines",
     json.dumps(
         {

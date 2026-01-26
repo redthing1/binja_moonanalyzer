@@ -1,3 +1,5 @@
-from binaryninja import *
+from __future__ import annotations
 
-from .moonanalyzer import binja_init
+from .moonanalyzer.app import plugin_init
+
+plugin_init.init()
