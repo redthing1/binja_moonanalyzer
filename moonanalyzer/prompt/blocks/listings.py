@@ -17,4 +17,7 @@ def build_listing_block(context: ContextGraph, listings: ListingBundle) -> str:
         else:
             blocks.append("-- listing missing --")
         blocks.append("")
-    return "\n".join(blocks).strip()
+    body = "\n".join(blocks).strip()
+    if not body:
+        body = "-- listing missing --"
+    return f"```\n{body}\n```"
