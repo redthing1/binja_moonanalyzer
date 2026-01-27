@@ -6,6 +6,7 @@ from ..blocks.instructions import build_instructions_block
 from ..blocks.metadata import build_metadata_block
 from ..blocks.listings import build_listing_block
 from ..blocks.dsl_spec import build_dsl_spec_block
+from ..blocks.analysis_policy import build_analysis_policy_block
 
 
 class AnalysisV1Recipe:
@@ -22,11 +23,13 @@ class AnalysisV1Recipe:
     ) -> Prompt:
         parts = [
             "You are an expert reverse-engineering assistant.",
+            "Output exactly one fenced `bndsl` block AFTER the analysis.",
             build_instructions_block(instructions),
+            build_analysis_policy_block(),
+            build_dsl_spec_block(),
             build_metadata_block(bv),
             "LISTINGS:",
             build_listing_block(context, listings),
-            build_dsl_spec_block(),
         ]
         text = "\n\n".join(p for p in parts if p)
         truncated = False

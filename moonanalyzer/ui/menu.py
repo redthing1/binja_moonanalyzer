@@ -35,8 +35,7 @@ def _quick_analysis_action(bv: BinaryView) -> None:
     )
     instructions = PromptInstructions(
         project_context=settings.get_string("moonanalyzer.analysis_project_context", bv),
-        focus_instructions=settings.get_string("moonanalyzer.custom_prompt_additions", bv),
-        detail_level=settings.get_string("moonanalyzer.level_of_detail_instructions", bv),
+        focus_preset=settings.get_string("moonanalyzer.analysis_focus_preset", bv) or "general",
     )
     policy = PromptPolicy(max_chars=0)
 

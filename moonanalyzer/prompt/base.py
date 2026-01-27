@@ -15,8 +15,7 @@ class PromptInstructions:
     """High-level guidance to include in prompt construction."""
 
     project_context: str = ""
-    focus_instructions: str = ""
-    detail_level: str = ""
+    focus_preset: str = "general"
 
 
 @dataclass(frozen=True)

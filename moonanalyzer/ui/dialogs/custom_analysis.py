@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QPushButton,
@@ -35,6 +34,7 @@ from ...listing.renderers.hlil import HLILListingRenderer
 from ...listing.renderers.disassembly import DisassemblyListingRenderer
 from ...listing.renderers.combined import CombinedListingRenderer
 from ...prompt.base import PromptInstructions, PromptPolicy
+from ...prompt.presets import FOCUS_PRESETS
 from ...settings import settings
 from ...util import get_current_function
 from ..qt import get_monospace_font
@@ -122,21 +122,16 @@ class CustomAnalysisDialog(QDialog):
             settings.get_string("moonanalyzer.analysis_project_context", bv)
         )
 
-        self.focus_instructions = QPlainTextEdit()
-        self.focus_instructions.setFont(get_monospace_font())
-        self.focus_instructions.setPlainText(
-            settings.get_string("moonanalyzer.custom_prompt_additions", bv)
-        )
-
-        self.detail_level = QPlainTextEdit()
-        self.detail_level.setFont(get_monospace_font())
-        self.detail_level.setPlainText(
-            settings.get_string("moonanalyzer.level_of_detail_instructions", bv)
-        )
+        self.focus_combo = QComboBox()
+        for preset_id, preset in FOCUS_PRESETS.items():
+            self.focus_combo.addItem(preset.label, preset_id)
+        current_focus = settings.get_string("moonanalyzer.analysis_focus_preset", bv) or "general"
+        idx = self.focus_combo.findData(current_focus)
+        if idx >= 0:
+            self.focus_combo.setCurrentIndex(idx)
 
         prompt_layout.addRow("Project context", self.project_context)
-        prompt_layout.addRow("Focus", self.focus_instructions)
-        prompt_layout.addRow("Detail level", self.detail_level)
+        prompt_layout.addRow("Focus", self.focus_combo)
         prompt_group.setLayout(prompt_layout)
         config_layout.addWidget(prompt_group)
 
@@ -346,8 +341,7 @@ class CustomAnalysisDialog(QDialog):
         listing_params = ListingParams(max_lines=self.max_lines_spin.value())
         instructions = PromptInstructions(
             project_context=self.project_context.toPlainText().strip(),
-            focus_instructions=self.focus_instructions.toPlainText().strip(),
-            detail_level=self.detail_level.toPlainText().strip(),
+            focus_preset=self.focus_combo.currentData() or "general",
         )
         policy = PromptPolicy(max_chars=0)
 

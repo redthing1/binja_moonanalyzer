@@ -45,27 +45,13 @@ settings.register_setting(
 )
 
 settings.register_setting(
-    "moonanalyzer.custom_prompt_additions",
+    "moonanalyzer.analysis_focus_preset",
     json.dumps(
         {
-            "title": "Custom Prompt Additions",
-            "description": "Custom prompt additions for analysis context.",
-            "default": "",
+            "title": "Analysis Focus Preset",
+            "description": "Focus preset for analysis prompts (general/deep).",
+            "default": "general",
             "type": "string",
-            "ignore": ["SettingsUserScope"],
-        }
-    ),
-)
-
-settings.register_setting(
-    "moonanalyzer.level_of_detail_instructions",
-    json.dumps(
-        {
-            "title": "Level of Detail Instructions",
-            "description": "Level of detail instructions for analysis context.",
-            "default": "",
-            "type": "string",
-            "ignore": ["SettingsUserScope"],
         }
     ),
 )
