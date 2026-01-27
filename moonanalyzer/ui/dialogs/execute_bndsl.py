@@ -2,15 +2,12 @@ from __future__ import annotations
 
 from typing import List
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
-    QTextEdit,
+    QPlainTextEdit,
     QVBoxLayout,
 )
 
@@ -35,30 +32,23 @@ class ExecuteBNDslDialog(QDialog):
 
         layout = QVBoxLayout()
 
-        self.editor = QTextEdit()
+        self.editor = QPlainTextEdit()
         self.editor.setFont(get_monospace_font())
         self.editor.setPlaceholderText("Paste BNDSL here...")
+        self.editor.setLineWrapMode(QPlainTextEdit.NoWrap)
         layout.addWidget(self.editor)
 
-        button_row = QHBoxLayout()
-        self.check_button = QPushButton("Check Syntax")
-        self.apply_button = QPushButton("Apply")
-        self.apply_button.setEnabled(False)
-        button_row.addWidget(self.check_button)
-        button_row.addWidget(self.apply_button)
-        layout.addLayout(button_row)
-
-        self.status_label = QLabel("Ready.")
+        self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        self.preview_list = QListWidget()
-        self.preview_list.setSelectionMode(QListWidget.NoSelection)
-        layout.addWidget(self.preview_list)
+        button_row = QHBoxLayout()
+        self.apply_button = QPushButton("Apply")
+        button_row.addWidget(self.apply_button)
+        layout.addLayout(button_row)
 
         self.setLayout(layout)
 
-        self.check_button.clicked.connect(self._on_check)
         self.apply_button.clicked.connect(self._on_apply)
 
     def _set_status(self, text: str, is_error: bool = False) -> None:
@@ -68,22 +58,13 @@ class ExecuteBNDslDialog(QDialog):
         else:
             self.status_label.setStyleSheet("")
 
-    def _render_preview(self, commands: List[DSLCommand]) -> None:
-        self.preview_list.clear()
-        for idx, cmd in enumerate(commands):
-            item = QListWidgetItem(f"{idx + 1}. {cmd.command_type} {cmd}")
-            item.setFlags(Qt.ItemIsEnabled)
-            self.preview_list.addItem(item)
-
-    def _on_check(self) -> None:
+    def _validate(self) -> List[DSLCommand]:
         text = self.editor.toPlainText()
         self._commands = []
-        self.apply_button.setEnabled(False)
 
         if not text.strip():
             self._set_status("BNDSL is empty.", is_error=True)
-            self.preview_list.clear()
-            return
+            return []
 
         try:
             commands = parse_bndsl(text)
@@ -92,41 +73,38 @@ class ExecuteBNDslDialog(QDialog):
             if exc.line is not None and exc.column is not None:
                 location = f" (line {exc.line}, col {exc.column})"
             self._set_status(f"Parse error{location}: {exc}", is_error=True)
-            self.preview_list.clear()
-            return
+            return []
 
         issues = validate_bndsl(commands)
         errors = [i for i in issues if i.severity == "error"]
         warnings = [i for i in issues if i.severity == "warning"]
 
         self._commands = commands
-        self._render_preview(commands)
 
         if errors:
             self._set_status(
                 f"Validation failed: {len(errors)} error(s), {len(warnings)} warning(s).",
                 is_error=True,
             )
-            self.apply_button.setEnabled(False)
-            return
+            return []
 
-        status = f"Syntax OK: {len(commands)} command(s)"
         if warnings:
-            status += f" ({len(warnings)} warning(s))"
-        self._set_status(status)
-        self.apply_button.setEnabled(True)
+            self._set_status(f"{len(warnings)} warning(s).")
+        else:
+            self._set_status("")
+        return commands
 
     def _on_apply(self) -> None:
-        if not self._commands:
-            self._on_check()
-        if not self._commands:
+        commands = self._validate()
+        if not commands:
             return
 
         report = self._services.dsl_executor.apply(
-            self._bv, self._commands, ExecutionOptions(dry_run=False, strict=False)
+            self._bv, commands, ExecutionOptions(dry_run=False, strict=False)
         )
         if report.success:
             self._set_status(report.message)
+            self.accept()
         else:
             detail = report.error or "Execution failed."
             self._set_status(f"{report.message}\n{detail}", is_error=True)
