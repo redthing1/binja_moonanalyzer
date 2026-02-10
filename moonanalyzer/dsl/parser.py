@@ -43,7 +43,7 @@ _BNDSL_LARK_GRAMMAR = r"""
     patch_stmt   : "PATCH"i HEX_ADDRESS (AT_STRING | NORMAL_STRING)
 
     HEX_ADDRESS: /0x[0-9a-fA-F]+/
-    IDENTIFIER: /[a-zA-Z_][a-zA-Z0-9_.:\-<>?]*/
+    IDENTIFIER: /[a-zA-Z_$][a-zA-Z0-9_.$:\-<>?]*/
     AT_STRING : /@"(?:[^"\\]|\\.)*"/
     NORMAL_STRING : /"(?:[^"\\]|\\.)*"/
 
